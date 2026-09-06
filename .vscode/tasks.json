@@ -1,0 +1,25 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ImageChat: Run locally",
+      "type": "shell",
+      "command": "sh",
+      "args": ["scripts/dev.sh", "run"],
+      "windows": { "command": "powershell", "args": ["-NoProfile", "-File", "scripts/dev.ps1", "run"] },
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "ImageChat: Tests",
+      "type": "shell",
+      "command": "sh",
+      "args": ["scripts/dev.sh", "test"],
+      "windows": { "command": "powershell", "args": ["-NoProfile", "-File", "scripts/dev.ps1", "test"] },
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

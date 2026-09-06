@@ -1,0 +1,17 @@
+services:
+  imagechat:
+    build: .
+    ports:
+      - "127.0.0.1:5080:8080"
+    environment:
+      Foundry__Endpoint: ${FOUNDRY_ENDPOINT:-}
+      Foundry__Deployment: ${FOUNDRY_DEPLOYMENT:-gpt-image-2}
+      Foundry__ApiKey: ${FOUNDRY_API_KEY:-}
+      Foundry__AuthMode: ${FOUNDRY_AUTH_MODE:-ApiKey}
+      Foundry__ApiStyle: ${FOUNDRY_API_STYLE:-deployments}
+      Foundry__ApiVersion: ${FOUNDRY_API_VERSION:-2025-04-01-preview}
+    volumes:
+      - imagechat-data:/app/data
+    restart: unless-stopped
+volumes:
+  imagechat-data:

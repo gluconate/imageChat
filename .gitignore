@@ -1,0 +1,14 @@
+bin/
+obj/
+**/bin/
+**/obj/
+.cache/
+.dotnet/
+.nuget/
+data/
+TestResults/
+appsettings.Local.json
+.env
+.env.*
+*.user
+*.log

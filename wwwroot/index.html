@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5f0">
+  <meta name="description" content="Frame — a quiet space to turn your imagination into images.">
+  <title>Frame / image studio</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 11.5a8 8 0 0 1-8 8H5l-3 2v-10a9 9 0 0 1 18 0Z"/></symbol>
+      <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 1 7M3 4v6h6M12 7v5l3 2"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+      <symbol id="i-attach" viewBox="0 0 24 24"><path d="m8 13 7-7a3 3 0 0 1 4 4L9 20a5 5 0 0 1-7-7L13 2m-8 14 10-10"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 15v6h16v-6"/></symbol>
+      <symbol id="i-expand" viewBox="0 0 24 24"><path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></symbol>
+      <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/></symbol>
+    </defs>
+  </svg>
+
+  <a class="skip-link" href="#prompt">Skip to image prompt</a>
+  <button id="sidebar-backdrop" class="sidebar-backdrop" aria-label="Close sidebar" tabindex="-1" hidden></button>
+  <aside id="sidebar" class="sidebar" aria-label="Chat navigation">
+    <div class="brand-row">
+      <a class="brand" href="#" id="brand-home" aria-label="Frame image studio, welcome">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <span class="brand-name">Frame<span class="brand-caption">/ image studio</span></span>
+      </a>
+      <button id="sidebar-close" class="icon-button sidebar-close" aria-label="Close sidebar"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+    <button id="new-chat" class="new-chat" disabled><svg class="icon"><use href="#i-plus"/></svg>New chat<span aria-hidden="true">↗</span></button>
+    <div class="sidebar-tabs" role="tablist" aria-label="Conversations">
+      <button id="chat-tab" role="tab" aria-selected="true" aria-controls="history-panel" tabindex="0"><svg class="icon"><use href="#i-chat"/></svg>Chat</button>
+      <button id="history-tab" role="tab" aria-selected="false" aria-controls="history-panel" tabindex="-1"><svg class="icon"><use href="#i-history"/></svg>History</button>
+    </div>
+    <div class="history-search"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg><label class="sr-only" for="history-search">Search chat titles</label><input id="history-search" type="search" placeholder="Search conversations" autocomplete="off"></div>
+    <section id="history-panel" class="history-panel" role="tabpanel" aria-labelledby="chat-tab">
+      <div class="history-heading"><h2 id="history-heading">Recent chats</h2><button id="refresh-history" class="icon-button" aria-label="Refresh chat history" title="Refresh history" disabled><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+      <p id="history-empty" class="history-empty">Loading your conversations…</p>
+      <ul id="chat-list" class="chat-list" aria-label="Saved conversations"></ul>
+    </section>
+    <div class="sidebar-footer">
+      <div class="local-label"><span class="local-dot" aria-hidden="true"></span>Saved locally. Yours to revisit.</div>
+      <p>Sessions live on the machine running this app, not just in this browser.</p>
+      <div class="sidebar-signoff"><span>A space for your next idea.</span><span aria-hidden="true">✳</span></div>
+    </div>
+  </aside>
+
+  <main id="main" class="main">
+    <header class="topbar">
+      <div class="topbar-heading"><button id="sidebar-toggle" class="icon-button mobile-menu" aria-label="Open chat navigation" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#i-menu"/></svg></button><span class="studio-label">THE STUDIO</span><span class="topbar-divider" aria-hidden="true">/</span><span id="chat-title" class="chat-title">A fresh perspective</span></div>
+      <div class="topbar-actions"><span id="status-chip" class="status-chip"><span aria-hidden="true"></span><span id="status-chip-text">Checking setup</span></span><button id="settings-open" class="settings-button"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg><span>Settings</span></button></div>
+    </header>
+
+    <div class="banners">
+      <section id="config-warning" class="notice notice-warning" role="alert" aria-labelledby="config-title" hidden><div><h2 id="config-title">Checking backend configuration</h2><p id="config-message"></p></div><button id="config-settings" class="text-button">View setup</button></section>
+      <div id="app-error" class="notice notice-error" role="alert" hidden><p id="app-error-text"></p><button id="dismiss-error" class="icon-button" aria-label="Dismiss error"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <p id="app-notice" class="app-notice" role="status" hidden></p>
+      <div id="navigation-progress" class="navigation-progress" role="status" hidden><span class="spinner" aria-hidden="true"></span><span id="navigation-progress-text">Loading…</span></div>
+    </div>
+
+    <div id="workspace" class="workspace">
+      <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+        <div class="welcome-eyebrow"><span class="tiny-frame" aria-hidden="true"></span>BIG IDEAS START WITH A LITTLE WHAT IF.</div>
+        <h1 id="welcome-title" tabindex="-1">Make room for<br><em>imagination.</em></h1>
+        <p class="welcome-description">An idea, a few words, a new possibility.<br>Describe what’s on your mind. Let’s see where it goes.</p>
+        <div class="inspiration-heading"><span>A PLACE TO START</span><span>Make it your own <span aria-hidden="true">↙</span></span></div>
+        <div class="suggestion-grid">
+          <button class="suggestion" data-prompt="A sculptural terracotta vase with a single curved branch, warm afternoon light, soft peach background, editorial still life photography, subtle film grain.">
+            <span class="suggestion-art art-still" aria-hidden="true"><span class="art-orbit"></span><span class="art-vase"></span><span class="art-sphere"></span></span>
+            <span class="suggestion-info"><span><strong>Everyday, reimagined.</strong><span>An unexpected still life</span></span><span class="suggestion-arrow" aria-hidden="true">↗</span></span>
+          </button>
+          <button class="suggestion" data-prompt="A dreamlike architectural archway opening onto a pale lavender sky, pastel pink walls, a sunlit staircase, minimalist surrealism, soft shadows, tranquil and spacious.">
+            <span class="suggestion-art art-arch" aria-hidden="true"><span class="arch-window"></span><span class="arch-stairs"></span><span class="arch-sun"></span></span>
+            <span class="suggestion-info"><span><strong>A different perspective.</strong><span>Architecture with a daydream</span></span><span class="suggestion-arrow" aria-hidden="true">↗</span></span>
+          </button>
+          <button class="suggestion" data-prompt="An otherworldly landscape of rolling moss-green hills beneath a giant pale sun, a still reflective lake, dreamy atmospheric haze, fine art print, muted earthy colors.">
+            <span class="suggestion-art art-land" aria-hidden="true"><span class="land-sun"></span><span class="land-hill hill-back"></span><span class="land-hill hill-front"></span><span class="land-water"></span></span>
+            <span class="suggestion-info"><span><strong>Somewhere else entirely.</strong><span>A world only you could imagine</span></span><span class="suggestion-arrow" aria-hidden="true">↗</span></span>
+          </button>
+        </div>
+        <p class="art-caption">Prompt inspiration · decorative CSS artwork, not generated images</p>
+      </section>
+      <section id="conversation" class="conversation" aria-label="Conversation" hidden>
+        <h1 id="conversation-title" class="sr-only" tabindex="-1">Image conversation</h1>
+        <div id="messages" class="messages" aria-label="Chat messages"></div>
+        <div id="empty-chat" class="empty-chat" hidden><span class="empty-chat-mark" aria-hidden="true">✳</span><h2>A blank canvas. All yours.</h2><p>Start with a description or an image. Your ideas will find a home here.</p></div>
+      </section>
+    </div>
+
+    <section class="composer-dock" aria-label="Create an image">
+      <div id="generation-progress" class="generation-progress" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Making space for your idea… <span id="generation-elapsed" aria-hidden="true">0:00</span></strong><p>Generation can take up to 5 minutes. Keep this tab open. New chat, selection, and deletion are paused.</p></div></div>
+      <div id="recovery-notice" class="notice notice-warning recovery-notice" role="status" hidden><div><strong>The result hasn’t been confirmed.</strong><p id="recovery-text">Your draft is safe. Check the saved result before retrying to avoid creating a duplicate. Keep this tab open; navigation is paused.</p></div><button id="check-result" class="text-button">Check saved result</button></div>
+      <form id="composer" class="composer" novalidate>
+        <div class="drop-hint" aria-hidden="true"><svg class="icon"><use href="#i-attach"/></svg>Drop one PNG or JPEG here</div>
+        <div id="attachment-preview" class="attachment-preview" hidden><img id="attachment-image" alt="Attached image preview"><div><strong id="attachment-name"></strong><span id="attachment-size"></span></div><button id="attachment-remove" type="button" class="icon-button" aria-label="Remove attached image"><svg class="icon"><use href="#i-close"/></svg></button></div>
+        <label for="prompt" class="sr-only">Describe the image you want to create</label>
+        <textarea id="prompt" rows="2" maxlength="8000" placeholder="Describe something only you can imagine…" aria-describedby="composer-help image-only-help composer-error" disabled></textarea>
+        <p id="image-only-help" class="image-only-help" hidden>No text? We’ll send: “Create a new variation of this image, preserving its main subject and style.”</p>
+        <div class="composer-options">
+          <div class="select-control"><label for="quality">Quality</label><select id="quality" disabled><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+          <div class="select-control"><label for="size">Size</label><select id="size" disabled><option value="1024x1024">1024 × 1024</option><option value="1536x1024">1536 × 1024</option><option value="1024x1536">1024 × 1536</option><option value="1536x1536">1536 × 1536</option><option value="3840x2160">3840 × 2160</option></select></div>
+          <label class="reuse-control" for="use-latest"><input id="use-latest" type="checkbox" checked disabled>Use latest image</label>
+          <span class="output-count">1 output</span>
+        </div>
+        <div class="composer-bottom"><div class="attachment-controls"><input id="image-input" class="sr-only" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" aria-label="Attach one PNG or JPEG, up to 20 MB" tabindex="-1" disabled><button id="attach-button" type="button" class="attach-button" disabled><svg class="icon" aria-hidden="true"><use href="#i-attach"/></svg><span>Add image</span></button><span class="attachment-limit">PNG / JPEG · up to 20 MB</span></div><button id="send-button" type="submit" class="send-button" disabled><span id="send-label">Generate</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+      </form>
+      <p id="composer-error" class="composer-error" role="alert" hidden></p>
+      <div id="composer-help" class="composer-help"><span>Drop or paste one image · Enter to send · Shift + Enter for a new line</span><span>Images are sent to <strong>Microsoft Foundry</strong>. Sessions are stored locally.</span></div>
+    </section>
+    <noscript><p class="notice notice-error">Frame needs JavaScript to load chats and generate images. Enable JavaScript to use the studio.</p></noscript>
+  </main>
+
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-heading"><div><span class="dialog-eyebrow">YOUR STUDIO</span><h2 id="settings-title">A little behind the scenes.</h2></div><button class="icon-button" data-close="settings-dialog" aria-label="Close settings" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <section class="settings-section"><div class="settings-section-heading"><h3>Backend readiness</h3><button id="refresh-status" class="text-button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Check again</button></div><p id="settings-readiness" class="readiness" role="status">Checking configuration…</p><dl class="config-details"><div><dt>Deployment</dt><dd id="settings-deployment">Not reported</dd></div><div><dt>Authentication</dt><dd id="settings-auth">Not reported</dd></div></dl><p id="settings-message" class="settings-message"></p><p>Configuration is not a connectivity test. A configured backend may still encounter authentication, quota, model, or service errors.</p></section>
+    <section class="settings-section"><h3>Configuration stays on the server.</h3><p>Set the Microsoft Foundry endpoint, image deployment, and authentication in the backend’s configuration. This frontend reads readiness from the backend; it never asks for API keys, tokens, or other secrets.</p></section>
+    <section class="settings-section privacy-section"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><div><h3>Your ideas, and where they go.</h3><p>Prompts and attached or reused images leave this machine and are sent to Microsoft Foundry for image generation. Chats and generated images are saved locally on the machine hosting the backend. Only the selected chat ID is kept in this browser’s local storage.</p><p>“Use latest image” reuses the latest successfully generated image in this chat. A new attachment replaces that reference. Earlier successful prompts remain context; use New chat for a clean start. Image-only uploads create a variation using the default prompt shown in the composer. Each request produces one output. Assistant captions are app-generated, not text responses from GPT-image-2.</p></div></section>
+    <div class="dialog-footer"><button class="primary-button" data-close="settings-dialog">Back to creating</button></div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description"><div class="dialog-heading"><h2 id="confirm-title">Delete this chat?</h2><button class="icon-button" data-close="confirm-dialog" aria-label="Cancel"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="confirm-description"></p><div class="dialog-footer"><button class="secondary-button" data-close="confirm-dialog" autofocus>Keep chat</button><button id="confirm-action" class="danger-button">Delete chat</button></div></dialog>
+
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-dialog-title"><div class="image-dialog-toolbar"><h2 id="image-dialog-title">Image preview</h2><div><a id="preview-download" class="secondary-button" download><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Download</a><button class="icon-button" data-close="image-dialog" aria-label="Close image preview" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div></div><img id="large-image" alt="Full-size chat image"><p id="preview-error" role="alert" hidden>The image could not be loaded. Close the preview and try again.</p></dialog>
+</body>
+</html>
