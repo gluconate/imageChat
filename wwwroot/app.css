@@ -278,6 +278,20 @@ dialog::backdrop { background: #1f251ec4; backdrop-filter: blur(5px); }
 .image-dialog > img { display: block; max-width: 100%; max-height: calc(100dvh - 155px); margin: 0 auto; object-fit: contain; border-radius: 5px; }
 #preview-error { color: #933b29; padding: 20px; }
 
+/* Account navigation is separate from the chat toolbar, so narrow layouts wrap. */
+.account-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; margin: 8px 36px 0; color: #656b5a; font-size: 12px; }
+.account-bar > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.account-name { overflow-wrap: anywhere; min-width: 0; }
+.account-bar .text-button { min-height: 38px; font-size: 11px; }
+.password-dialog > p { font-size: 12px; line-height: 1.8; }
+.password-dialog fieldset { border: 0; padding: 0; margin: 20px 0 0; min-width: 0; }
+.password-dialog label { display: block; margin: 16px 0 6px; font-size: 12px; font-weight: 600; }
+.password-dialog input { width: 100%; min-height: 44px; border: 1px solid #bcbfb0; background: #fffefa; color: var(--ink); border-radius: 7px; padding: 10px 12px; }
+.password-dialog input:read-only { background: #eeeee3; }
+.password-dialog .dialog-footer { flex-wrap: wrap; }
+@media (max-width: 800px) { .account-bar { margin-inline: 22px; } }
+@media (max-width: 540px) { .account-bar { margin-inline: 14px; } .password-dialog input { font-size: 16px; } }
+
 @media (min-width: 1600px) {
   .welcome { padding-top: 80px; }
   .welcome h1 { font-size: 82px; }

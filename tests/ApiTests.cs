@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using ImageChat;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -19,7 +20,7 @@ public class ApiTests
     public async Task ChatRoundtripSupportsTextImageFollowupPersistenceAndDeletion()
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var create = await http.PostAsJsonAsync("/api/chats", new { });
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
@@ -61,7 +62,7 @@ public class ApiTests
     public async Task FailedGenerationIsPersistedAndCanBeRetried()
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var chat = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
         factory.Generator.Fail = true;
@@ -81,7 +82,7 @@ public class ApiTests
     public async Task MissingHeaderAndInvalidUploadAreRejectedWithoutModelCalls()
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         Assert.Equal(HttpStatusCode.Forbidden, (await http.PostAsJsonAsync("/api/chats", new { })).StatusCode);
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var chat = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
@@ -99,7 +100,7 @@ public class ApiTests
     public async Task DifferentChatsGenerateConcurrentlyAndFinishIndependently()
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var a = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
         var b = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
@@ -152,7 +153,7 @@ public class ApiTests
     public async Task BusyChatRejectsDuplicateAndDeletionButAllowsOtherChatOperations()
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var busy = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
         var finish = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -193,7 +194,7 @@ public class ApiTests
     public async Task FailedOrCancelledGenerationReleasesItsChatWithoutBlockingAnother(bool cancelled)
     {
         await using var factory = new AppFactory();
-        using var http = factory.CreateClient();
+        using var http = await factory.CreateAuthenticatedClient();
         http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
         var a = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
         var b = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
@@ -236,10 +237,25 @@ public class ApiTests
         return form;
     }
 
-    private sealed class AppFactory : WebApplicationFactory<Program>
+    internal sealed class AppFactory : WebApplicationFactory<Program>
     {
+        internal const string TestPassword = "Only-for-tests-Password123!";
+        public bool BootstrapAccounts { get; set; } = true;
+        public bool TrustTestProxy { get; set; }
+        public bool RequireHttps { get; set; }
         public string DataDirectory { get; } = Path.Combine(FindRepo(), ".cache", "test-data", Guid.NewGuid().ToString("N"));
         public FakeGenerator Generator { get; } = new();
+        public async Task<HttpClient> CreateAuthenticatedClient(string username = "testadmin", string password = TestPassword)
+        {
+            var client = CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+            using var login = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login")
+            {
+                Content = JsonContent.Create(new { username, password })
+            };
+            login.Headers.Add("X-ImageChat-Request", "1");
+            (await client.SendAsync(login)).EnsureSuccessStatusCode();
+            return client;
+        }
         private static string FindRepo()
         {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -252,10 +268,27 @@ public class ApiTests
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Foundry:Endpoint"] = "https://example.test", ["Foundry:ApiKey"] = "not-a-real-key",
-                ["Foundry:AuthMode"] = "ApiKey", ["Storage:Directory"] = DataDirectory
+                ["Foundry:AuthMode"] = "ApiKey", ["Storage:Directory"] = DataDirectory,
+                ["ReverseProxy:Enabled"] = TrustTestProxy.ToString(),
+                ["ReverseProxy:KnownProxies:0"] = "127.0.0.1",
+                ["Security:RequireHttps"] = RequireHttps.ToString()
             }));
             builder.ConfigureServices(services =>
             {
+                services.RemoveAll<AppPaths>();
+                services.AddSingleton(new AppPaths(DataDirectory));
+                services.RemoveAll<UserStore>();
+                services.AddSingleton(_ =>
+                {
+                    var users = new UserStore(DataDirectory);
+                    if (BootstrapAccounts)
+                    {
+                        users.Bootstrap("testadmin", TestPassword);
+                        users.Create("testuser", TestPassword, "user");
+                    }
+                    return users;
+                });
+                services.AddSingleton<IStartupFilter, TestRemoteAddress>();
                 services.RemoveAll<FoundryOptions>();
                 services.AddSingleton(new FoundryOptions { Endpoint = "https://example.test", ApiKey = "not-a-real-key" });
                 services.RemoveAll<ChatStore>();
@@ -268,10 +301,22 @@ public class ApiTests
         {
             await base.DisposeAsync();
             SqliteConnection.ClearAllPools();
-            if (Directory.Exists(DataDirectory)) Directory.Delete(DataDirectory, true);
+            if (Directory.Exists(DataDirectory)) LocalFileIO.RetrySharing(() => { Directory.Delete(DataDirectory, true); return 0; });
         }
     }
-    private sealed class FakeGenerator : IImageGenerator
+    private sealed class TestRemoteAddress : IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use((context, nextMiddleware) =>
+            {
+                context.Connection.RemoteIpAddress = IPAddress.Loopback;
+                return nextMiddleware(context);
+            });
+            next(app);
+        };
+    }
+    internal sealed class FakeGenerator : IImageGenerator
     {
         private readonly ConcurrentQueue<GenerationInput> inputs = new();
         public GenerationInput[] Inputs => inputs.ToArray();

@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5f0">
+  <title>Administration — Frame</title>
+  <link rel="stylesheet" href="/portal.css">
+  <script src="/admin.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#admin-title">Skip to administration</a>
+  <header class="portal-header">
+    <a class="portal-brand" href="/" aria-label="Frame image studio"><span class="frame-mark" aria-hidden="true">▧</span>Frame<span>/ administration</span></a>
+    <nav class="portal-nav" aria-label="Account navigation"><span id="admin-account" class="account-name"></span><a href="/">Studio ↗</a><button id="admin-logout" class="secondary-button" type="button" hidden>Sign out</button></nav>
+  </header>
+  <main class="portal-main">
+    <div class="page-heading"><div><p class="eyebrow">BEHIND THE STUDIO</p><h1 id="admin-title" tabindex="-1">A little perspective.</h1><p class="muted">Image activity and the people who make it.</p></div><span class="access-badge">Administrators only</span></div>
+    <p id="admin-status" class="status" role="status">Checking administrator access…</p>
+    <p id="admin-error" class="notice error" role="alert" hidden></p>
+    <button id="admin-retry" class="secondary-button" type="button" hidden>Retry access check</button>
+    <section id="forbidden" class="card" aria-labelledby="forbidden-title" hidden><h2 id="forbidden-title">This space is for administrators.</h2><p>Your account does not have access to administration. Return to the studio to work on your images.</p><a class="primary-button" href="/">Back to studio</a></section>
+    <div id="admin-content" hidden>
+      <nav class="section-nav" aria-label="Administration sections"><a href="#activity">Image activity</a><a href="#users">Accounts</a></nav>
+      <section id="activity" class="admin-section" aria-labelledby="activity-title">
+        <div class="section-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h2 id="activity-title">Image activity</h2></div><button id="telemetry-refresh" class="secondary-button" type="button">Refresh activity</button></div>
+        <p class="section-description">Totals cover every matching historical record, not just this page. Deleting a chat does not reduce these totals. Older records are shown separately as legacy / unknown: their client IP and request type may be unavailable.</p>
+        <form id="filter-form" class="card filter-card">
+          <fieldset id="filter-fields">
+            <legend>Filter historical requests</legend>
+            <p id="timezone-help" class="muted">Dates and times use your browser’s local timezone. From is inclusive; to is exclusive.</p>
+            <div class="filter-grid">
+              <div class="field"><label for="filter-from">From (inclusive)</label><input id="filter-from" name="from" type="datetime-local" step="1" aria-describedby="timezone-help"></div>
+              <div class="field"><label for="filter-to">To (exclusive)</label><input id="filter-to" name="to" type="datetime-local" step="1" aria-describedby="timezone-help"></div>
+              <div class="field"><label for="filter-ip">Exact client IP</label><input id="filter-ip" name="ip" type="text" maxlength="64" placeholder="IPv4 or IPv6" autocomplete="off" spellcheck="false" aria-describedby="ip-help"><small id="ip-help">Exact address, not a prefix or range. Recorded by the server.</small></div>
+            </div>
+            <div class="form-actions"><button class="primary-button" type="submit">Apply filters</button><button id="filter-clear" class="secondary-button" type="button">Clear · all time</button></div>
+          </fieldset>
+        </form>
+        <p id="telemetry-status" class="status" role="status"></p>
+        <p id="telemetry-error" class="notice error" role="alert" hidden></p>
+        <div id="telemetry-results" aria-busy="false">
+          <dl class="metric-grid" aria-label="Totals across all filtered records">
+            <div class="metric"><dt>Generated images</dt><dd id="total-generatedImages">—</dd><small>Known generation requests</small></div>
+            <div class="metric"><dt>Edited images</dt><dd id="total-editedImages">—</dd><small>Known edit requests</small></div>
+            <div class="metric"><dt>Legacy images</dt><dd id="total-legacyImages">—</dd><small>Historical / unknown type</small></div>
+            <div class="metric accent"><dt>All images</dt><dd id="total-totalImages">—</dd><small>Generated + edited + legacy</small></div>
+          </dl>
+          <dl class="request-totals"><div><dt>Requests</dt><dd id="total-requests">—</dd></div><div><dt>Failed</dt><dd id="total-failed">—</dd></div><div><dt>Rejected</dt><dd id="total-rejected">—</dd></div><div><dt>Pending</dt><dd id="total-pending">—</dd></div></dl>
+          <div class="table-scroll" role="region" aria-label="Historical image requests; scroll horizontally for all columns" tabindex="0">
+            <table class="activity-table"><caption id="activity-caption">Historical requests · local times</caption><thead><tr><th scope="col">Requested</th><th scope="col">Completed</th><th scope="col">Account</th><th scope="col">Client IP</th><th scope="col">Operation</th><th scope="col">Status</th><th scope="col">Images</th><th scope="col">HTTP</th><th scope="col">Request ID</th></tr></thead><tbody id="telemetry-rows"></tbody></table>
+          </div>
+          <p id="telemetry-empty" class="empty-state" hidden>No requests match these filters.</p>
+          <div class="pagination" aria-label="Activity pages"><p id="page-description">No page loaded.</p><div><button id="page-previous" class="secondary-button" type="button" disabled>Previous</button><button id="page-next" class="secondary-button" type="button" disabled>Next</button></div></div>
+        </div>
+        <p class="privacy-note">Only request metadata is shown. Telemetry contains no passwords, prompts or image content. Counts and client addresses are supplied by the server, never by a client identity field.</p>
+      </section>
+      <section id="users" class="admin-section" aria-labelledby="users-title">
+        <div class="section-heading"><div><p class="eyebrow">PEOPLE &amp; PERMISSIONS</p><h2 id="users-title">Studio accounts</h2></div><div class="form-actions"><button id="users-refresh" class="secondary-button" type="button">Refresh accounts</button><button id="user-create" class="primary-button" type="button">Create account</button></div></div>
+        <p class="section-description">Administrators can manage accounts and view telemetry. The last enabled administrator cannot be deleted, demoted or disabled. Changing your own account ends your session.</p>
+        <p id="users-status" class="status" role="status"></p>
+        <p id="users-error" class="notice error" role="alert" hidden></p>
+        <div id="users-results" aria-busy="false"><div class="table-scroll" role="region" aria-label="Studio accounts; scroll horizontally for all columns" tabindex="0"><table><caption>Accounts · passwords are never displayed</caption><thead><tr><th scope="col">Username</th><th scope="col">Role</th><th scope="col">Enabled</th><th scope="col">Created (local)</th><th scope="col">Actions</th></tr></thead><tbody id="user-rows"></tbody></table></div><p id="users-empty" class="empty-state" hidden>No accounts were returned.</p></div>
+      </section>
+    </div>
+    <noscript><p class="notice error">JavaScript is required to use administration.</p></noscript>
+  </main>
+  <dialog id="user-dialog" aria-labelledby="user-dialog-title" aria-describedby="user-dialog-help">
+    <div class="section-heading"><h2 id="user-dialog-title">Create account</h2><button id="user-close" class="secondary-button" type="button">Close</button></div>
+    <p id="user-dialog-help" class="muted">Provide the account details. Share credentials securely outside this application.</p>
+    <p id="user-error" class="notice error" role="alert" hidden></p>
+    <p id="user-status" class="status" role="status"></p>
+    <form id="user-form" method="post" action="/api/admin/users">
+      <fieldset id="user-fields"><legend class="sr-only">Account details</legend>
+        <div class="field"><label for="user-username">Username</label><input id="user-username" name="username" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]{3,64}" required aria-describedby="user-name-help"><small id="user-name-help">3–64 ASCII letters, numbers, dots, underscores or hyphens. Usernames cannot be changed.</small></div>
+        <div class="field"><label for="user-role">Role</label><select id="user-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select></div>
+        <div id="user-enabled-field" class="field" hidden><label class="checkbox-label" for="user-enabled"><input id="user-enabled" name="enabled" type="checkbox" checked>Account enabled</label></div>
+        <div class="field"><label id="user-password-label" for="user-password">Initial password</label><input id="user-password" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required aria-describedby="user-password-help"><small id="user-password-help">12–128 characters. Never saved in browser storage or displayed in the accounts list.</small></div>
+        <div class="form-actions"><button id="user-save" class="primary-button" type="submit">Create account</button><button id="user-cancel" class="secondary-button" type="button">Cancel</button></div>
+      </fieldset>
+    </form>
+  </dialog>
+  <dialog id="admin-confirm" aria-labelledby="confirm-title" aria-describedby="confirm-description"><h2 id="confirm-title">Confirm account change</h2><p id="confirm-description"></p><div class="form-actions"><button id="confirm-cancel" class="secondary-button" type="button" autofocus>Cancel</button><button id="confirm-accept" class="danger-button" type="button">Confirm</button></div></dialog>
+</body>
+</html>

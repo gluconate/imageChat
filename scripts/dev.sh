@@ -9,9 +9,10 @@ export DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1
 export TMPDIR="$PWD/.cache/tmp"
 mkdir -p "$TMPDIR"
 case "${1:-run}" in
+  create-admin) dotnet run --project ImageChat.csproj -c Release --no-launch-profile -- --create-admin ;;
   run) dotnet run --project ImageChat.csproj --no-launch-profile ;;
   test) dotnet test tests/ImageChat.Tests.csproj -c Release ;;
   build) dotnet build ImageChat.csproj ;;
   publish) dotnet publish ImageChat.csproj -c Release -o .cache/publish ;;
-  *) echo 'Usage: sh scripts/dev.sh [run|test|build|publish]' >&2; exit 1 ;;
+  *) echo 'Usage: sh scripts/dev.sh [run|test|build|publish|create-admin]' >&2; exit 1 ;;
 esac

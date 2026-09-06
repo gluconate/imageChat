@@ -1,4 +1,4 @@
-param([ValidateSet('run', 'test', 'build', 'publish')][string]$Action = 'run')
+param([ValidateSet('run', 'test', 'build', 'publish', 'create-admin')][string]$Action = 'run')
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
@@ -12,6 +12,7 @@ $env:TEMP = Join-Path $repo '.cache/tmp'
 $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Force $env:TEMP | Out-Null
 switch ($Action) {
+    'create-admin' { dotnet run --project ImageChat.csproj -c Release --no-launch-profile -- --create-admin }
     'run' { dotnet run --project ImageChat.csproj --no-launch-profile }
     # Keep tests separate from the running Debug server's locked Windows apphost.
     'test' { dotnet test tests/ImageChat.Tests.csproj -c Release }

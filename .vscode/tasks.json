@@ -2,6 +2,15 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "ImageChat: Create administrator",
+      "type": "shell",
+      "command": "sh",
+      "args": ["scripts/dev.sh", "create-admin"],
+      "windows": { "command": "powershell", "args": ["-NoProfile", "-File", "scripts/dev.ps1", "create-admin"] },
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
       "label": "ImageChat: Run locally",
       "type": "shell",
       "command": "sh",

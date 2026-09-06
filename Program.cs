@@ -1,22 +1,41 @@
 using System.Threading.RateLimiting;
+using System.Security.Claims;
 using Azure.Core;
 using Azure.Identity;
 using ImageChat;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 
-var builder = WebApplication.CreateBuilder(args);
+var createAdmin = args.Contains("--create-admin", StringComparer.Ordinal);
+var hostArgs = args.Where(arg => arg != "--create-admin").ToArray();
+var builder = WebApplication.CreateBuilder(hostArgs);
 // Repo-local secrets for development; environment variables always win in containers/cloud.
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false)
-    .AddEnvironmentVariables().AddCommandLine(args);
+    .AddEnvironmentVariables().AddCommandLine(hostArgs);
+builder.Services.AddSingleton(services => new AppPaths(Path.GetFullPath(
+    services.GetRequiredService<IConfiguration>()["Storage:Directory"] ?? "data",
+    services.GetRequiredService<IWebHostEnvironment>().ContentRootPath)));
+if (createAdmin)
+{
+    BootstrapAdmin.Run(Path.GetFullPath(builder.Configuration["Storage:Directory"] ?? "data", builder.Environment.ContentRootPath));
+    return;
+}
+// Do not allow the platform convenience switch to enable trust-all forwarded headers.
+// Client identity is resolved only by the explicit allowlist configured below.
+builder.WebHost.UseSetting("FORWARDEDHEADERS_ENABLED", "false");
+builder.Services.AddAccountSecurity(builder.Configuration);
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    if (builder.Configuration.GetValue<bool>("ReverseProxy:Enabled")) ProxySecurity.Configure(options, builder.Configuration);
+});
 builder.Services.AddSingleton(services => services.GetRequiredService<IConfiguration>()
     .GetSection("Foundry").Get<FoundryOptions>() ?? new());
 builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
 builder.Services.AddHttpClient<IImageGenerator, FoundryClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-builder.Services.AddSingleton(services => new ChatStore(Path.GetFullPath(
-    services.GetRequiredService<IConfiguration>()["Storage:Directory"] ?? "data",
-    services.GetRequiredService<IWebHostEnvironment>().ContentRootPath)));
+builder.Services.AddSingleton(services => new ChatStore(services.GetRequiredService<AppPaths>().DataDirectory));
 builder.Services.AddSingleton<ChatOperations>();
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = InputRules.MaxImageBytes + 1024 * 1024);
 builder.Services.Configure<FormOptions>(f =>
@@ -29,6 +48,11 @@ builder.Services.Configure<FormOptions>(f =>
 builder.Services.AddRateLimiter(rate =>
 {
     rate.RejectionStatusCode = 429;
+    rate.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
+        TelemetryFilter.NormalizeIp(context.Connection.RemoteIpAddress) ?? "unknown", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0
+        }));
     rate.AddFixedWindowLimiter("generation", limiter =>
     {
         limiter.PermitLimit = 5;
@@ -36,18 +60,23 @@ builder.Services.AddRateLimiter(rate =>
         limiter.QueueLimit = 0;
     });
     rate.OnRejected = async (context, token) =>
-        await context.HttpContext.Response.WriteAsJsonAsync(new { error = "Too many requests. Wait a minute before generating another image." }, token);
+        await context.HttpContext.Response.WriteAsJsonAsync(new { error = "Too many requests. Wait a minute before trying again." }, token);
 });
 var app = builder.Build();
 var options = app.Services.GetRequiredService<FoundryOptions>();
 // Recover any interrupted turns once per app startup, not on the first generation.
-_ = app.Services.GetRequiredService<ChatStore>();
+var store = app.Services.GetRequiredService<ChatStore>();
+var users = app.Services.GetRequiredService<UserStore>();
+// Pre-login single-user data belongs only to the original bootstrap administrator.
+var firstAdmin = users.List().Where(user => user.Role == "admin").OrderBy(user => user.CreatedAt).FirstOrDefault();
+if (firstAdmin != null) store.ClaimLegacyChats(firstAdmin.Id);
 
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
     context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
+    context.Response.Headers.CacheControl = "no-store";
     if (context.Request.Path.StartsWithSegments("/api"))
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -83,36 +112,113 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { error = message });
     }
 });
+if (builder.Configuration.GetValue<bool>("ReverseProxy:Enabled")) app.UseForwardedHeaders();
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path != "/healthz" && builder.Configuration.GetValue<bool>("Security:RequireHttps") && !context.Request.IsHttps)
+        throw new AppException(400, "HTTPS is required. Configure TLS and trusted proxy forwarding before signing in.");
+    if (context.Request.Path.StartsWithSegments("/api") && context.Request.Method is not ("GET" or "HEAD"))
+    {
+        if (context.Request.Headers.TryGetValue("Origin", out var origin) &&
+            !string.Equals(origin.ToString(), $"{context.Request.Scheme}://{context.Request.Host}", StringComparison.OrdinalIgnoreCase))
+            throw new AppException(403, "Cross-origin requests are not allowed.");
+        if (context.Request.Path.StartsWithSegments("/api/auth") || context.Request.Path.StartsWithSegments("/api/admin/users"))
+        {
+            var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+            if (limit is { IsReadOnly: false }) limit.MaxRequestBodySize = 16 * 1024;
+            if (context.Request.ContentLength > 16 * 1024) throw new AppException(413, "Account request is too large.");
+        }
+    }
+    await next();
+});
+app.UseAuthentication();
+app.UseAuthorization();
+// Gate static HTML as well as APIs: no alternate /index.html or /admin.html bypass.
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value?.ToLowerInvariant() ?? "/";
+    var publicPath = path is "/login" or "/login.html" or "/login.js" or "/portal.css" or "/app.css" or "/app.js" or "/admin.js" or "/healthz" or "/api/auth/session" or "/api/auth/login";
+    if (!publicPath && context.User.Identity?.IsAuthenticated != true)
+    {
+        await context.ChallengeAsync();
+        return;
+    }
+    if ((path == "/admin.html" || path == "/admin" || path.StartsWith("/admin/") || path.StartsWith("/api/admin/")) && !context.User.IsInRole("admin"))
+    {
+        await context.ForbidAsync();
+        return;
+    }
+    await next();
+});
+app.Use(async (context, next) =>
+{
+    string? telemetryId = null;
+    if (context.Request.Method == "POST" && context.Request.Path.StartsWithSegments("/api/chats") &&
+        context.Request.Path.Value!.EndsWith("/messages", StringComparison.OrdinalIgnoreCase))
+    {
+        telemetryId = store.StartRequest(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!,
+            context.User.Identity!.Name!, TelemetryFilter.NormalizeIp(context.Connection.RemoteIpAddress));
+        context.Items["telemetryId"] = telemetryId;
+    }
+    var failureStatus = 0;
+    try { await next(); }
+    catch (Exception exception)
+    {
+        failureStatus = exception switch
+        {
+            AppException e => e.StatusCode,
+            BadHttpRequestException e => e.StatusCode,
+            InvalidDataException => 400,
+            OperationCanceledException => 504,
+            HttpRequestException => 502,
+            _ => 500
+        };
+        throw;
+    }
+    finally
+    {
+        if (telemetryId != null) store.EndRequest(telemetryId, failureStatus != 0 ? failureStatus : context.Response.StatusCode);
+    }
+});
+app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
-app.UseRateLimiter();
+app.MapAccountEndpoints();
+app.MapGet("/login", (IWebHostEnvironment env) => Results.File(Path.Combine(env.WebRootPath, "login.html"), "text/html; charset=utf-8")).AllowAnonymous();
+app.MapGet("/admin", (IWebHostEnvironment env) => Results.File(Path.Combine(env.WebRootPath, "admin.html"), "text/html; charset=utf-8"))
+    .RequireAuthorization(policy => policy.RequireRole("admin"));
+app.MapGet("/api/admin/telemetry", (string? from, string? to, string? ip, int? page, int? pageSize, ChatStore chats) =>
+    chats.Report(TelemetryFilter.Parse(from, to, ip, page, pageSize))).RequireAuthorization(policy => policy.RequireRole("admin"));
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/api/status", () => new { configured = options.ConfigurationError() == null, deployment = options.Deployment,
     authMode = options.AuthMode, message = options.ConfigurationError() ?? "Configuration ready. The connection is verified when you generate an image." });
-app.MapGet("/api/chats", (ChatStore store) => store.List());
-app.MapPost("/api/chats", (ChatStore store) => Results.Json(store.Create(), statusCode: 201));
-app.MapGet("/api/chats/{id}", (string id, ChatStore store) => store.Get(id));
-app.MapDelete("/api/chats/{id}", (string id, ChatStore store, ChatOperations operations) =>
+app.MapGet("/api/chats", (ChatStore store, ClaimsPrincipal user) => store.List(user.FindFirstValue(ClaimTypes.NameIdentifier)!));
+app.MapPost("/api/chats", (ChatStore store, ClaimsPrincipal user) => Results.Json(store.Create(user.FindFirstValue(ClaimTypes.NameIdentifier)!), statusCode: 201));
+app.MapGet("/api/chats/{id}", (string id, ChatStore store, ClaimsPrincipal user) => store.Get(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!));
+app.MapDelete("/api/chats/{id}", (string id, ChatStore store, ChatOperations operations, ClaimsPrincipal user) =>
 {
+    store.Get(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!);
     using var operation = operations.Acquire(id);
-    store.Delete(id);
+    store.Delete(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!);
     return Results.NoContent();
 });
-app.MapGet("/api/images/{id}", (string id, bool? download, ChatStore store) =>
+app.MapGet("/api/images/{id}", (string id, bool? download, ChatStore store, ClaimsPrincipal user) =>
 {
-    var image = store.GetImage(id) ?? throw new AppException(404, "Image not found.");
+    var image = store.GetImage(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!) ?? throw new AppException(404, "Image not found.");
     var extension = image.ContentType == "image/png" ? "png" : "jpg";
     return Results.File(image.Bytes, image.ContentType, download == true ? $"image-{id}.{extension}" : null);
 });
 app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, ChatStore store,
     IImageGenerator generator, ChatOperations operations, IHostApplicationLifetime lifetime) =>
 {
+    var ownerId = request.HttpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+    store.Get(id, ownerId);
     if (options.ConfigurationError() is { } configurationError) throw new AppException(503, configurationError);
     using var operation = operations.Acquire(id);
     string? assistantId = null;
     try
     {
-        var chat = store.Get(id);
+        var chat = store.Get(id, ownerId);
         if (!request.HasFormContentType) throw new AppException(400, "Send text and images as multipart form data.");
         var form = await request.ReadFormAsync(request.HttpContext.RequestAborted);
         var size = form["size"].ToString();
@@ -133,11 +239,12 @@ app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, C
         // An explicit attachment supersedes the latest generated image. History text remains context.
         var reference = attachment ?? (usePrevious ? store.LatestImage(chat) : null);
         var input = new GenerationInput(InputRules.BuildPrompt(chat, prompt), size, quality, reference);
-        assistantId = store.BeginTurn(chat, prompt, size, quality, attachment);
+        assistantId = store.BeginTurn(chat, prompt, size, quality, attachment,
+            request.HttpContext.Items["telemetryId"] as string, reference == null ? "generation" : "edit");
         // Persist the result even if the browser disconnects. Only timeout/app shutdown cancels generation.
         var image = await generator.GenerateAsync(input, lifetime.ApplicationStopping);
         store.FinishTurn(id, assistantId, image, null);
-        return Results.Ok(store.Get(id));
+        return Results.Ok(store.Get(id, ownerId));
     }
     catch (Exception ex)
     {

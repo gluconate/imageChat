@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5f0">
+  <title>Sign in — Frame</title>
+  <link rel="stylesheet" href="/portal.css">
+  <script src="/login.js" defer></script>
+</head>
+<body class="login-page">
+  <a class="skip-link" href="#login-title">Skip to sign in</a>
+  <main class="login-layout">
+    <section class="login-story" aria-labelledby="frame-title">
+      <a class="portal-brand" href="/" aria-label="Frame image studio"><span class="frame-mark" aria-hidden="true">▧</span>Frame<span>/ image studio</span></a>
+      <div><p class="eyebrow">A SPACE FOR YOUR NEXT IDEA</p><h1 id="frame-title">Make room for<br><em>imagination.</em></h1><p>Your conversations. Your next perspective.<br>A quiet studio, one account at a time.</p></div>
+      <p class="story-signoff">An idea, a few words, a new possibility. <span aria-hidden="true">✳</span></p>
+    </section>
+    <section class="login-panel" aria-labelledby="login-title">
+      <div class="login-card">
+        <p class="eyebrow">WELCOME TO FRAME</p>
+        <h2 id="login-title" tabindex="-1">Your studio awaits.</h2>
+        <p class="muted">Sign in with an account provided by your administrator. There is no public registration.</p>
+        <p id="login-notice" class="notice" role="status" hidden></p>
+        <p id="login-status" class="status" role="status">Checking sign-in availability…</p>
+        <p id="login-error" class="notice error" role="alert" hidden></p>
+        <section id="setup-required" class="notice" aria-labelledby="setup-title" hidden>
+          <h3 id="setup-title">An administrator needs to set up Frame.</h3>
+          <p>On the host machine, use the VS Code task <strong>ImageChat: Create administrator</strong>, or run <code>powershell -NoProfile -File scripts/dev.ps1 create-admin</code> on Windows or <code>sh scripts/dev.sh create-admin</code> on Linux/macOS. Enter credentials only in your own terminal. Restart the server afterward, then check again here.</p>
+          <p>No default credentials are created. Do not enter host credentials or API keys on this page.</p>
+        </section>
+        <form id="login-form" method="post" action="/api/auth/login">
+          <fieldset id="login-fields" disabled>
+            <legend class="sr-only">Account sign in</legend>
+            <div class="field"><label for="login-username">Username</label><input id="login-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="64" pattern="[A-Za-z0-9._\-]{3,64}" required aria-describedby="username-help"><small id="username-help">3–64 ASCII letters, numbers, dots, underscores or hyphens.</small></div>
+            <div class="field"><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="128" required></div>
+            <button id="login-submit" class="primary-button full-width" type="submit">Sign in <span aria-hidden="true">↗</span></button>
+          </fieldset>
+        </form>
+        <button id="login-retry" class="text-button" type="button" hidden>Check again</button>
+        <p class="privacy-note">Chats are scoped to your signed-in account and saved on the host. Authenticated image requests record username, time and client IP for administrators; these records remain after chat deletion. Telemetry does not include passwords, prompts or image content.</p>
+        <noscript><p class="notice error">JavaScript is required to sign in. Enable it, then reload this page.</p></noscript>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

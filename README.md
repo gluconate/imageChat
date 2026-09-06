@@ -8,6 +8,8 @@ A local image-creation studio for a **GPT-image-2 deployment in Microsoft Foundr
 - Follow-up requests using earlier successful prompts and the latest generated image.
 - New chats, persistent history, title search, reopening and deleting conversations.
 - Parallel generations across independent chats, with per-chat drafts and live progress in history.
+- Login portal, per-user chat/image ownership, administrator account management and password resets.
+- Administrator telemetry: generation/edit counts and request outcomes filtered by time and client IP.
 - PNG/JPEG upload, drop and paste, preview, one-click image download, quality and size controls.
 - Server-only credentials; configurable API-key or Microsoft Entra authentication.
 - One portable SQLite database for chats, original uploads and generated image bytes.
@@ -24,8 +26,14 @@ Prerequisite: **.NET 10 SDK**. It is already installed on the machine where this
    - `Deployment`: the **deployment name** you assigned to GPT-image-2, which may differ from the model name.
    - `ApiKey`: your resource key. Enter it directly in the local file, **not in Copilot chat**, browser code, or a committed file.
    - `AuthMode`: `ApiKey` (default), or see keyless authentication below.
-3. In VS Code select **Terminal → Run Task → ImageChat: Run locally**.
-4. Open **http://localhost:5080**.
+3. Create the first administrator **once**, using the interactive command below. Enter the password directly in your own terminal, never in Copilot chat. No default account or public registration is provided.
+
+  ```powershell
+  powershell -NoProfile -File scripts/dev.ps1 create-admin
+  ```
+
+4. In VS Code select **Terminal → Run Task → ImageChat: Run locally**. If the server was already running, restart it after administrator setup to claim pre-login chat history.
+5. Open **http://localhost:5080/login** and sign in. Administrators can open **http://localhost:5080/admin**.
 
 Alternatively, from the repository:
 
@@ -33,7 +41,7 @@ Alternatively, from the repository:
 powershell -NoProfile -File scripts/dev.ps1 run
 ```
 
-The server starts without credentials so history and the UI can be used. A setup banner explains what is missing; generation stays disabled until configured. **Restart the server after changing configuration.** The readiness indicator checks configuration only, not connectivity. Your first real generation verifies access and can incur your deployment's normal charges.
+The server starts without accounts or Foundry credentials, but the studio and APIs require login. The login screen explains offline administrator setup when no accounts exist. After login, a setup banner explains missing Foundry configuration; generation stays disabled until configured. **Restart the server after changing configuration.** The readiness indicator checks configuration only, not connectivity. Your first real generation verifies access and can incur your deployment's normal charges.
 
 On a fresh clone, the ignored local file will be absent. Create it yourself with:
 
@@ -55,10 +63,55 @@ Never commit the completed file. API keys are not encrypted at rest in this loca
 Install the .NET 10 SDK, create the same local configuration, then:
 
 ```sh
+sh scripts/dev.sh create-admin
 sh scripts/dev.sh run
 ```
 
 The development scripts keep SDK/NuGet/temp caches in `.cache/` and set environment variables only for their process. They do not install anything globally or change machine/user settings. The app defaults to localhost only.
+
+## Login and user management
+
+The entire studio, chat/image APIs, and administrator pages require authentication. `/login`, sign-in assets, `/api/auth/session`, and `/healthz` are public; there is **no web-based first-admin creation endpoint**. Bootstrap runs only in an operator's interactive terminal and refuses to run once accounts exist. If the development server is running, the bootstrap script uses Release output to avoid its locked Windows executable.
+
+- The operator-managed **data/users.json** file stores usernames, immutable user IDs, roles, enabled state, password hashes, session-revocation stamps and durable login lockout metadata. It is outside the web root, ignored by Git, and excluded from publication/container images with the rest of the data directory. Do not move it into the web root or commit it.
+- Passwords are **salted PBKDF2-HMAC-SHA256 with 600,000 iterations**, a random 16-byte salt and a 32-byte derived hash. The versioned encoding stores algorithm, cost, salt and hash. Plain SHA-256 is **not** a safe password-storage algorithm. No plaintext password is written to the file or returned by user APIs.
+- Usernames are 3–64 ASCII letters/digits/`.`/`_`/`-`, unique case-insensitively. Passwords are 12–128 characters. Roles are `admin` or `user`.
+- Administrators can create/delete accounts, assign roles, enable/disable accounts and reset passwords from `/admin`. Deleting, disabling, demoting the **last enabled administrator** is rejected. Username changes are intentionally not supported.
+- Role, enabled state, password resets and logout invalidate existing account sessions. **Logout signs out all sessions for that account**, including cookies copied elsewhere. An authenticated user can change their own password from Settings; they must sign in again afterward. Other tabs detect session expiry/account changes and clear private in-memory drafts.
+- Cookies are HttpOnly, SameSite=Strict, eight-hour non-sliding tickets. Identity, role and revocation stamp are validated against the account file on each authenticated request. Missing/corrupt storage fails closed; it is never silently recreated after disappearance in a running process.
+- Sign-in and password-change attempts share a **10-per-minute per-client-IP** limit. An existing account locks for 15 minutes after five failed logins in a 15-minute window. An administrator password reset clears lockout. Unknown usernames receive the same generic response and password-hash work, without creating records for attackers' names.
+- Browser mutations require the same-origin application header and reject mismatched Origin/cross-site requests. No cross-origin API sharing is enabled. These controls complement—not replace—authentication and TLS.
+- Users, including administrators, only access **their own** chats and image downloads. Telemetry grants administrators metadata access, not other users' image/prompt access. Pre-login chats are assigned to the earliest administrator at the first server startup after bootstrap; existing history is not deleted. Newly created users start with no chats.
+- Deleting a user does not erase their historical telemetry or automatically delete their stored chats. Recreating the same username produces a new ID and does not grant access to the deleted account's chats. Plan administrative retention/cleanup before broad production use.
+
+Use the UI rather than hand-editing the accounts file while running. Account writes are synchronized and atomically replaced; back up the whole data directory with the app stopped. If all administrators lose credentials, there is no insecure public reset escape hatch: recover the protected account file from a known-good backup or perform a deliberate offline operator-managed recovery. Do not delete it casually; user IDs govern chat ownership.
+
+## Administrator telemetry
+
+Open `/admin` as an administrator to see all-time or filtered totals for **generated**, **edited**, **legacy** and **total images**, request records, failures, rejections and pending work. Filters use an inclusive **From**, exclusive **To**, and optional **exact IPv4/IPv6 address**. The UI accepts local time and sends explicit UTC timestamps; results show the browser's timezone. Totals include the entire filtered dataset, not just the current 50-row page.
+
+Each authenticated image-request attempt that passes the authentication/CSRF/HTTPS guards is recorded in SQLite **before** generation throttling. The record contains an opaque request ID, user ID/username, resolved client IP, UTC request/completion time, operation (`generation`, `edit`, or `unknown` before validation), outcome, output-image count and HTTP status. This includes rate-limited, invalid, missing-chat, busy-chat and upstream-failed requests. Unauthenticated traffic, sign-in attempts and requests rejected by the earlier security guards are **not** part of this image telemetry.
+
+- Text follow-ups that reuse an existing image count as **edits**, as do image-only and text+image submissions. Inputs themselves are not counted as generated outputs. Only successfully saved outputs increment image totals; the successful assistant message and telemetry count are committed in one transaction.
+- A pending record is visible while generation runs. Server restarts mark unfinished request records **interrupted**, not successful. A request can still have incurred upstream charges even if its response was lost, so these are application-output counts—not billing measurements.
+- Existing successful stored outputs are backfilled once as **legacy / unknown**, with their existing message timestamp and **no invented IP, username or generation/edit classification**. Images deleted before telemetry was introduced cannot be reconstructed. Exact-IP filtering excludes legacy records with unknown IP.
+- Deleting chats does **not** delete telemetry or reduce historical output totals. Records are independent of chat/message foreign keys and contain **no prompts, uploaded/generated image bytes, passwords, keys or cookies**.
+- IP addresses and usernames can be personal data. The studio discloses collection, but the operator remains responsible for notices, access controls, lawful use, retention periods and deletion procedures. Records currently persist until an operator applies an appropriate retention policy; no automatic expiry/export system is included.
+
+### Accurate IPs behind Azure / reverse proxies
+
+By default forwarding is **disabled** and the app records the connection's remote IP, ignoring client-supplied `X-Forwarded-For`. In local testing this is normally loopback; behind an unconfigured cloud ingress it will be the proxy, not the end user's address.
+
+For an actual trusted ingress, configure:
+
+- `ReverseProxy__Enabled=true`
+- `ReverseProxy__KnownProxies__0=<actual proxy IP>` and/or `ReverseProxy__KnownNetworks__0=<actual trusted proxy CIDR>`
+- `Security__RequireHttps=true` and HTTPS at the ingress
+- `AllowedHosts=<actual public hostname>`
+
+The app processes **one trusted forwarding hop**, accepts only `X-Forwarded-For` and `X-Forwarded-Proto` from the allowlist, normalizes IPv4-mapped IPv6, and rejects empty allowlists and `/0` trust-all networks when enabled. Do not guess Azure proxy ranges or trust every address/private network. Restrict direct container access to the trusted ingress; multiple proxies require a topology-specific configuration change and spoofing tests. The generic `ASPNETCORE_FORWARDEDHEADERS_ENABLED` convenience setting is disabled by the application to avoid implicit trust-all behavior.
+
+IP identifies a network source, not necessarily a person (NAT/VPNs/shared networks apply). The authenticated user ID provides account attribution. Reference: [ASP.NET Core reverse proxy guidance](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0).
 
 ## How image conversations work
 
@@ -112,6 +165,10 @@ All settings can be overridden by environment variables (double underscore repla
 | `Foundry__TokenScope` | `https://cognitiveservices.azure.com/.default` | Entra token audience; configurable for your endpoint |
 | `Foundry__TimeoutSeconds` | `300` | Clamped to 30–600 seconds |
 | `Storage__Directory` | `data` | Relative to content root, or an absolute mounted data directory |
+| `Security__RequireHttps` | `false` | Use `true` for cloud/public hosting: reject HTTP and always mark cookies Secure |
+| `ReverseProxy__Enabled` | `false` | Process forwarded IP/protocol only from explicit trusted ingress addresses |
+| `ReverseProxy__KnownProxies__0` | Not set | First trusted proxy IP (additional entries use `__1`, etc.) |
+| `ReverseProxy__KnownNetworks__0` | Not set | First trusted ingress CIDR; never use a trust-all network |
 | `URLS` | `http://localhost:5080` | Listening address; container sets port 8080 |
 | `AllowedHosts` | localhost and loopback IPs | Semicolon-separated allowed hostnames; set your cloud hostname explicitly |
 
@@ -123,13 +180,13 @@ For cloud hosting, prefer managed identity and an appropriate token scope for th
 
 ## Persistence and privacy
 
-All chat text and image bytes live in `data/imagechat.db` (plus SQLite WAL/SHM files while running). Data survives server/browser restarts. The browser stores only the selected chat ID, not credentials or conversations. Images are served only by database IDs, never user-provided filesystem paths.
+Chat text, image bytes, ownership and telemetry live in `data/imagechat.db` (plus SQLite WAL/SHM files while running). Accounts are in `data/users.json`; cookie-protection keys are in `data/keys/`. Data survives server/browser restarts. Browser localStorage holds only the selected chat ID; authentication uses a separate HttpOnly cookie, not JavaScript-accessible credentials. Images are served only by authorized database IDs, never user-provided filesystem paths.
 
 - Inputs are limited to one PNG/JPEG, maximum 20 MB, and 8,000 prompt characters. The server validates file signatures; it does not fully decode/re-encode uploads. The browser also checks that an image can decode. Foundry performs its own validation and moderation.
 - **Prompts and referenced images leave your machine and are sent to your Foundry deployment.** Local hosting does not mean local inference. Send only content you are authorized to process.
 - Deleting a chat deletes its database rows and image references. This is logical deletion, not a guarantee of forensic erasure from SQLite pages, WAL, backups or storage snapshots.
 - To back up or move the app's history, stop the server and copy the **entire data directory**. Do not copy only the main database while the server is running. For live backups, use SQLite's backup API instead.
-- Configuration and data directories are not encrypted by the application. Use OS permissions and encrypted storage for sensitive data.
+- Configuration and data directories are not encrypted by the application. Passwords are hashed, but usernames, IP telemetry and cookie-protection keys still require OS permissions and encrypted storage. Protect keys with platform-managed encryption/Key Vault or an appropriate certificate integration for production; the default persistent key files may produce an expected ASP.NET warning that no XML encryptor is configured. Never expose them or share the storage with untrusted users.
 - Failed requests are saved as failed turns. On restart, previously pending turns are marked interrupted so they do not remain pending forever.
 
 ## Docker / portable cloud packaging
@@ -150,19 +207,26 @@ Then:
 docker compose up --build
 ```
 
-Open http://localhost:5080. Compose binds only to loopback and uses a named volume for persistence. The image runs as non-root and does not contain the local settings file, uploads, test artifacts or development caches. `docker compose down` retains history; **adding `--volumes` deletes the named data volume**. Docker maintains its own external image/volume storage when you choose this option.
+On the first container start, bootstrap using your own interactive terminal:
+
+```sh
+docker compose exec -it imagechat dotnet ImageChat.dll --create-admin
+docker compose restart imagechat
+```
+
+Open http://localhost:5080/login. Compose binds only to loopback and uses a named volume for persistence. The image runs as non-root and does not contain local settings, accounts, key files, uploads, test artifacts or development caches. `docker compose down` retains data; **adding `--volumes` deletes the named data volume**, including accounts and history. Docker maintains its own external image/volume storage when you choose this option.
 
 For a future cloud deployment:
 
 1. Build/push the Docker image using your chosen platform; listen on port 8080.
 2. Configure Foundry settings as environment variables/managed identity. Set `AllowedHosts` to the public hostname.
-3. Mount a writable persistent volume at `/app/data`, accessible to the container's non-root user. Use storage with SQLite-compatible locking; avoid multi-writer network filesystems.
+3. Mount a writable persistent volume at `/app/data`, accessible only to the container's non-root user and trusted operators. Persist the entire directory, including users and cookie-protection keys. Use storage with SQLite-compatible locking and atomic file rename; avoid multi-writer network filesystems. Bootstrap the administrator via a protected interactive operator session, not an internet-accessible setup URL.
 4. Run **one application instance** with this SQLite implementation. Parallel chats are supported within that instance; startup recovery and the per-chat operation leases assume one process. Network/model work runs concurrently; SQLite writes remain short serialized transactions. For horizontal scaling, replace `ChatStore` with a managed database/object store, use distributed job coordination and persist idempotency keys.
-5. Add platform authentication/authorization, TLS and per-user ownership checks **before exposing it publicly**. Currently all users who reach the server share all chats; there is no login, user isolation or public-service abuse protection. Same-origin checks are not authentication.
+5. Enable TLS, `Security__RequireHttps=true`, the actual public `AllowedHosts` and the narrowly trusted ingress settings described above **before exposing it publicly**. File-based login includes roles and user isolation, but not MFA, email verification, self-registration or federated recovery. Prefer Microsoft Entra/platform identity for enterprise/public deployments; add perimeter abuse controls and operational security monitoring.
 6. Configure proxy timeouts to allow the generation timeout plus overhead, or move generation into a durable background queue for hosting platforms with short request limits. Keep uploaded/image response size limits aligned.
 7. Use `/healthz` for process health. It does not test Foundry availability or credentials. Set backups, storage quotas, retention, monitoring and budget alerts.
 
-The app is portable to cloud containers, but is **not a public multi-user SaaS security configuration**. No Azure resources, role assignments or deployments are modified by this project.
+The app is portable to a **single-instance** cloud container with durable storage and explicit network/security configuration. Built-in login is not a substitute for a production threat assessment, perimeter protection and account-recovery/retention policies. No Azure resources, role assignments or deployments are modified by this project.
 
 ## Test and publish
 
@@ -192,6 +256,11 @@ Program.cs               HTTP API, middleware and dependency injection
 FoundryClient.cs         Foundry image generation/editing and authentication
 ChatStore.cs             SQLite persistence
 ChatOperations.cs        Per-chat generation/deletion leases
+UserStore.cs             Atomic account file and salted password hashing
+AccountSecurity.cs       Cookies, session validation and account endpoints
+BootstrapAdmin.cs        Offline interactive first-administrator setup
+Telemetry.cs             Request records, legacy migration and filtered totals
+ProxySecurity.cs         Explicit trusted forwarded-IP/protocol configuration
 Models.cs                Contracts, validation and conversation context
 wwwroot/                 Dependency-free HTML/CSS/JavaScript website
 tests/                   Unit tests and in-process API integration tests

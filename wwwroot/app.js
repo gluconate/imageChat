@@ -8,6 +8,7 @@
   const $ = (id) => document.getElementById(id);
   const mobile = matchMedia("(max-width: 800px)");
   const state = {
+    user: null, authBusy: false, initializing: false,
     status: null, statusError: "", statusLoading: false,
     history: [], historyLoaded: false, activeId: null, tab: "chat",
     sessions: new Map(), deleted: new Set(), busy: "loading",
@@ -61,21 +62,25 @@
   }
 
   function showError(message, session = activeSession()) {
+    if (state.stopped) return;
     session.error = message;
     if (isActive(session)) renderFeedback();
   }
 
   function showNotice(message, session = activeSession()) {
+    if (state.stopped) return;
     session.notice = message;
     if (isActive(session)) renderFeedback();
   }
 
   function draftError(message, session = activeSession()) {
+    if (state.stopped) return;
     session.draftError = message;
     if (isActive(session)) renderFeedback();
   }
 
   function renderFeedback() {
+    if (state.stopped) return;
     const session = activeSession();
     $("app-error-text").textContent = session.error;
     $("app-error").hidden = !session.error;
@@ -103,23 +108,37 @@
   // Never automatically retry a mutating request, including when fetch loses its response.
   async function api(path, options = {}) {
     if (state.stopped) throw new Error("This page has been closed.");
+    // Check the cookie's current account before any chat mutation, not just on
+    // the next poll, to detect another tab's sign-in before sending this draft.
+    if (options.method && options.method !== "GET" && !path.startsWith("/api/auth/") && !await checkAccount()) {
+      throw new Error("This session has ended.");
+    }
     const headers = new Headers(options.headers);
     headers.set("Accept", "application/json");
     if (options.method && options.method !== "GET") headers.set("X-ImageChat-Request", "1");
     let response;
     const readOnly = !options.method || options.method === "GET";
-    const controller = readOnly ? new AbortController() : null;
-    if (controller) state.reads.add(controller);
+    const controller = new AbortController();
+    state.reads.add(controller);
     try {
       response = await fetch(path, {
         ...options, headers, credentials: "same-origin", cache: "no-store",
-        signal: controller ? AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) : undefined
+        signal: readOnly || path.startsWith("/api/auth/") ? AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]) : controller.signal
       });
     } catch (error) {
       if (controller) state.reads.delete(controller);
       throw new Error(error.name === "TimeoutError"
         ? "The backend took too long to respond. Please check its status and try again."
         : "The backend could not be reached. Check that it is running and that your network is available.");
+    }
+    if (state.stopped) { state.reads.delete(controller); throw new Error("This session has ended."); }
+    // Handle expiry before reading JSON, including empty/proxy-generated 401s.
+    if (response.status === 401) {
+      state.reads.delete(controller);
+      endSession();
+      const error = new Error("Your session ended. Sign in again to continue.");
+      error.status = 401;
+      throw error;
     }
     if (response.status === 204 && response.ok) {
       if (controller) state.reads.delete(controller);
@@ -135,6 +154,7 @@
     } finally {
       if (controller) state.reads.delete(controller);
     }
+    if (state.stopped) throw new Error("This session has ended.");
     if (!response.ok) {
       const error = new Error(text(payload?.error, `The request failed (HTTP ${response.status}).`));
       error.status = response.status;
@@ -142,6 +162,147 @@
       throw error;
     }
     return payload;
+  }
+
+  function unsavedWork() {
+    captureDraft();
+    return [...state.sessions.values()].some((session) => hasDraft(session) || chatBusy(session));
+  }
+
+  function clearPasswords() {
+    for (const id of ["password-current", "password-new", "password-confirm"]) $(id).value = "";
+  }
+
+  function clearAccountState() {
+    state.stopped = true;
+    window.clearTimeout(state.pollTimer);
+    window.clearInterval(state.clock);
+    for (const controller of state.reads) controller.abort();
+    state.reads.clear();
+    for (const session of state.sessions.values()) {
+      releaseAttachment(session);
+      session.draft.prompt = "";
+      session.chat = null;
+      session.request = null;
+    }
+    state.sessions.clear();
+    state.deleted.clear();
+    state.history = [];
+    state.activeId = null;
+    state.user = null;
+    state.status = null;
+    state.historyLoaded = false;
+    clearPasswords();
+    $("password-username").value = "";
+    $("prompt").value = "";
+    $("image-input").value = "";
+    $("history-search").value = "";
+    $("attachment-image").removeAttribute("src");
+    $("attachment-name").textContent = "";
+    $("attachment-size").textContent = "";
+    $("attachment-preview").hidden = true;
+    $("large-image").removeAttribute("src");
+    $("preview-download").removeAttribute("href");
+    $("chat-list").replaceChildren();
+    $("messages").replaceChildren();
+    $("chat-title").textContent = "Session ended";
+    $("conversation-title").textContent = "Image conversation";
+    $("account-name").textContent = "Signed out";
+    $("settings-account").textContent = "Signed out";
+    $("history-announcement").textContent = "";
+    $("confirm-description").textContent = "";
+    $("admin-link").hidden = true;
+    for (const id of ["app-error", "app-notice", "composer-error", "generation-progress", "recovery-notice"]) $(id).hidden = true;
+    for (const id of ["app-error-text", "app-notice", "composer-error", "recovery-text"]) $(id).textContent = "";
+    for (const control of document.querySelectorAll("button, input, textarea, select")) control.disabled = true;
+    for (const dialog of document.querySelectorAll("dialog[open]")) dialog.close();
+    const resolve = state.confirmResolve;
+    state.confirmResolve = null;
+    if (resolve) resolve(false);
+    document.title = "Frame / signed out";
+  }
+
+  function endSession(reason = "expired") {
+    if (state.stopped) return;
+    const hasWork = unsavedWork();
+    clearAccountState();
+    storeChatId(null);
+    // The login page explains draft loss; never keep another account's data alive.
+    const notice = hasWork && ["expired", "account-changed"].includes(reason) ? "expired-drafts" : reason;
+    location.replace(`/login?reason=${encodeURIComponent(notice)}`);
+  }
+
+  async function checkAccount() {
+    const session = await api("/api/auth/session");
+    if (session?.authenticated === false) { endSession(); return false; }
+    if (session?.authenticated !== true || !session.user?.id || typeof session.user.username !== "string" ||
+        !["admin", "user"].includes(session.user.role) || session.user.enabled !== true) {
+      throw new Error("The backend returned an invalid sign-in response.");
+    }
+    if (state.user && (state.user.id !== session.user.id || state.user.role !== session.user.role)) {
+      endSession("account-changed");
+      return false;
+    }
+    state.user = session.user;
+    $("account-name").textContent = `Signed in as ${state.user.username}`;
+    $("settings-account").textContent = `${state.user.username} · ${state.user.role === "admin" ? "administrator" : "user"}`;
+    $("password-username").value = state.user.username;
+    $("admin-link").hidden = state.user.role !== "admin";
+    updateControls();
+    return true;
+  }
+
+  async function logout() {
+    if (!state.user || state.authBusy || state.stopped || state.confirmResolve) return;
+    const hasWork = unsavedWork();
+    state.authBusy = true;
+    updateControls();
+    try {
+      const confirmed = await confirmAction({ title: "Sign out of Frame?", description: `${hasWork ? "You have in-memory drafts, attachments or running chats. " : ""}Signing out clears unsent drafts and attachments in this tab and revokes all sessions for this account, including other browsers. Saved chats remain; running image requests may still finish on the server.`, label: "Sign out", cancelLabel: "Stay in studio" });
+      if (!confirmed || state.stopped) return;
+      if (!await checkAccount()) return;
+      await api("/api/auth/logout", { method: "POST" });
+      endSession("signed-out");
+    } catch (error) { showError(`Sign-out could not be confirmed. ${errorText(error)} Your drafts are kept until the session ends.`); }
+    finally { state.authBusy = false; updateControls(); }
+  }
+
+  async function changePassword(event) {
+    event.preventDefault();
+    if (!state.user || state.authBusy || state.stopped || state.confirmResolve || !$("password-form").reportValidity()) return;
+    $("password-error").hidden = true;
+    if ($("password-new").value !== $("password-confirm").value) {
+      $("password-error").textContent = "The new passwords do not match. Re-enter them to continue.";
+      $("password-error").hidden = false;
+      clearPasswords();
+      $("password-current").focus();
+      return;
+    }
+    const payload = { currentPassword: $("password-current").value, newPassword: $("password-new").value };
+    clearPasswords();
+    state.authBusy = true;
+    updateControls();
+    try {
+      const hasWork = unsavedWork();
+      const confirmed = await confirmAction({ title: "Change password and sign out?", description: `${hasWork ? "You have drafts, attachments or running chats. " : ""}Saving your new password ends your session and clears in-memory drafts and attachments. Saved chats remain; running image requests may still finish.`, label: "Change password", cancelLabel: "Keep current password" });
+      if (!confirmed || state.stopped) { $("password-status").textContent = "Change cancelled. Re-enter passwords to try again."; return; }
+      if (!await checkAccount()) return;
+      $("password-status").textContent = "Changing password…";
+      await api("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      endSession("password-changed");
+    } catch (error) {
+      if (!state.stopped) {
+        $("password-error").textContent = `Password change could not be confirmed. ${errorText(error)} If the response was lost, try signing in with the new password before retrying.`;
+        $("password-error").hidden = false;
+        $("password-status").textContent = "Re-enter passwords to try again.";
+      }
+    } finally {
+      payload.currentPassword = "";
+      payload.newPassword = "";
+      clearPasswords();
+      state.authBusy = false;
+      updateControls();
+    }
   }
 
   function validateChat(chat, expectedId) {
@@ -181,7 +342,7 @@
   }
 
   function locked() {
-    return Boolean(state.busy || chatBusy(activeSession()) || activeSession().missing);
+    return Boolean(state.stopped || !state.user || state.authBusy || state.busy || chatBusy(activeSession()) || activeSession().missing);
   }
 
   function updateControls() {
@@ -189,11 +350,16 @@
     const session = activeSession();
     const request = session.request;
     const disabled = locked();
+    const accountLocked = !state.user || state.authBusy;
+    $("account-logout").disabled = accountLocked;
+    $("password-open").disabled = accountLocked;
+    $("password-fields").disabled = accountLocked;
+    for (const button of document.querySelectorAll('[data-close="password-dialog"]')) button.disabled = state.authBusy;
     for (const id of ["prompt", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
       $(id).disabled = disabled;
     }
-    $("new-chat").disabled = Boolean(state.busy);
-    $("refresh-history").disabled = Boolean(state.historyRead);
+    $("new-chat").disabled = Boolean(state.busy || accountLocked);
+    $("refresh-history").disabled = Boolean(state.historyRead || accountLocked);
     for (const button of document.querySelectorAll(".chat-select")) button.disabled = Boolean(state.busy);
     for (const button of document.querySelectorAll(".chat-delete")) {
       button.disabled = Boolean(state.busy || chatBusy(sessionFor(button.dataset.chatId)));
@@ -208,7 +374,7 @@
     $("resume-draft").hidden = request?.phase !== "unconfirmed";
     $("resume-draft").disabled = Boolean(state.busy || session.read || session.serverPending || !request?.checked);
     $("image-only-help").hidden = !session.draft.attachment || Boolean(session.draft.prompt.trim());
-    $("refresh-status").disabled = state.statusLoading;
+    $("refresh-status").disabled = state.statusLoading || accountLocked;
     $("generation-progress").hidden = !session.serverPending && request?.phase !== "sending";
     $("recovery-notice").hidden = request?.phase !== "unconfirmed";
     $("recovery-text").textContent = request?.detail || "";
@@ -218,12 +384,14 @@
   }
 
   function setBusy(kind, description = "Loading…") {
+    if (state.stopped) return;
     state.busy = kind;
     $("navigation-progress-text").textContent = description;
     updateControls();
   }
 
   function renderStatus() {
+    if (state.stopped) return;
     const configured = state.status?.configured === true;
     const unknown = !state.status;
     $("status-chip-text").textContent = state.statusLoading ? "Checking setup" : configured ? "Configured · not tested" : unknown ? "Setup unavailable" : "Setup needed";
@@ -242,15 +410,17 @@
   }
 
   async function loadStatus() {
-    if (state.statusLoading) return;
+    if (state.statusLoading || !state.user || state.stopped) return;
     state.statusLoading = true;
     renderStatus();
     try {
       const status = await api("/api/status");
+      if (state.stopped) return;
       if (!status || typeof status.configured !== "boolean") throw new Error("The backend returned an invalid readiness response.");
       state.status = status;
       state.statusError = "";
     } catch (error) {
+      if (state.stopped) return;
       state.status = null;
       state.statusError = errorText(error);
     } finally {
@@ -266,6 +436,7 @@
   }
 
   function loadHistory() {
+    if (!state.user || state.stopped) return Promise.resolve();
     // Manual refresh and the poller share one summary GET. Each chat has its own
     // revision fence, so a late list cannot roll back a create, send or completion.
     if (state.historyRead) return state.historyRead;
@@ -493,6 +664,7 @@
   }
 
   function renderChat() {
+    if (state.stopped) return;
     const chat = activeSession().chat;
     $("welcome").hidden = Boolean(chat);
     $("conversation").hidden = !chat;
@@ -600,6 +772,7 @@
   }
 
   function renderDraft() {
+    if (state.stopped) return;
     const draft = activeSession().draft;
     $("prompt").value = draft.prompt;
     $("prompt").style.height = "";
@@ -665,7 +838,7 @@
   }
 
   async function selectChat(id) {
-    if (state.busy) return;
+    if (state.busy || !state.user || state.authBusy || state.stopped) return;
     if (state.activeId === id) { setSidebar(false); return; }
     captureDraft();
     const origin = activeSession();
@@ -689,7 +862,7 @@
   }
 
   async function newChat() {
-    if (state.busy) return;
+    if (state.busy || !state.user || state.authBusy || state.stopped) return;
     captureDraft();
     const origin = activeSession();
     setBusy("creating", "Creating a new conversation…");
@@ -706,7 +879,7 @@
   }
 
   async function showWelcome() {
-    if (state.busy) return;
+    if (state.busy || !state.user || state.authBusy || state.stopped) return;
     captureDraft();
     activateSession(sessionFor(null));
     focusConversation();
@@ -714,16 +887,17 @@
 
   async function deleteChat(chat) {
     const session = sessionFor(chat.id);
-    if (state.busy || chatBusy(session) || state.confirmResolve) return;
+    if (state.busy || !state.user || state.authBusy || state.stopped || chatBusy(session) || state.confirmResolve) return;
     captureDraft();
-    const confirmed = await confirmAction({ title: "Delete this chat?", description: `“${text(chat.title, "Untitled chat") }” and its saved conversation will be deleted from local history. This cannot be undone.${hasDraft(session) ? " Its in-memory draft and attachment will also be cleared." : ""}`, label: "Delete chat", cancelLabel: "Keep chat" });
-    if (!confirmed || state.busy || chatBusy(session)) return;
+    const confirmed = await confirmAction({ title: "Delete this chat?", description: `“${text(chat.title, "Untitled chat") }” and its saved conversation will be deleted from your account’s history. This cannot be undone. Historical administrator telemetry is retained.${hasDraft(session) ? " Its in-memory draft and attachment will also be cleared." : ""}`, label: "Delete chat", cancelLabel: "Keep chat" });
+    if (!confirmed || state.busy || state.stopped || chatBusy(session)) return;
     const origin = activeSession();
     setBusy("deleting", "Deleting conversation…");
     session.revision += 1;
     try {
       try { await api(chatPath(chat.id), { method: "DELETE" }); }
       catch (error) { if (error.status !== 404) throw error; }
+      if (state.stopped) return;
       state.deleted.add(chat.id);
       state.history = state.history.filter((item) => item.id !== chat.id);
       releaseAttachment(session);
@@ -1002,8 +1176,17 @@
   }
 
   async function poll() {
-    if (state.stopped) return;
+    if (state.stopped || !state.user) return;
     let failed = false;
+    // Detect a different account signing in in another tab before reading chats.
+    try { if (!await checkAccount()) return; }
+    catch {
+      if (!state.stopped) {
+        $("sync-status").textContent = "Session check unavailable. Saved-result checks will resume when it succeeds.";
+        state.pollTimer = window.setTimeout(() => { void poll(); }, POLL_MS);
+      }
+      return;
+    }
     try { await loadHistory(); }
     catch { failed = true; }
     const sessions = [...state.sessions.values()].filter((session) => session.id &&
@@ -1078,6 +1261,19 @@
   $("settings-open").addEventListener("click", () => $("settings-dialog").showModal());
   $("config-settings").addEventListener("click", () => $("settings-dialog").showModal());
   $("refresh-status").addEventListener("click", () => { void loadStatus(); });
+  $("auth-retry").addEventListener("click", () => { void initialize(); });
+  $("account-logout").addEventListener("click", () => { void logout(); });
+  $("password-open").addEventListener("click", () => {
+    if (!state.user || state.authBusy || state.stopped) return;
+    clearPasswords();
+    $("password-error").hidden = true;
+    $("password-status").textContent = "";
+    $("password-dialog").showModal();
+    $("password-current").focus();
+  });
+  $("password-form").addEventListener("submit", (event) => { void changePassword(event); });
+  $("password-dialog").addEventListener("close", clearPasswords);
+  $("password-dialog").addEventListener("cancel", (event) => { if (state.authBusy) event.preventDefault(); });
   $("confirm-action").addEventListener("click", () => $("confirm-dialog").close("confirmed"));
   $("confirm-dialog").addEventListener("close", () => {
     const resolve = state.confirmResolve;
@@ -1085,17 +1281,22 @@
     if (resolve) resolve($("confirm-dialog").returnValue === "confirmed");
   });
   for (const button of document.querySelectorAll("[data-close]")) {
-    button.addEventListener("click", () => $(button.dataset.close).close());
+    button.addEventListener("click", () => {
+      if (button.dataset.close === "password-dialog" && state.authBusy) return;
+      $(button.dataset.close).close();
+    });
   }
   for (const dialog of document.querySelectorAll("dialog")) {
     // Also handle Escape explicitly for embedded browser hosts that suppress native dismissal.
     dialog.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (dialog.id === "password-dialog" && state.authBusy) return;
         dialog.close();
       }
     });
     dialog.addEventListener("click", (event) => {
+      if (dialog.id === "password-dialog" && state.authBusy) return;
       const rect = dialog.getBoundingClientRect();
       if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
     });
@@ -1181,6 +1382,7 @@
   $("check-result").addEventListener("click", () => { void checkSavedResult(); });
   $("resume-draft").addEventListener("click", () => { void resumeDraft(); });
   window.addEventListener("beforeunload", (event) => {
+    if (state.stopped) return;
     captureDraft();
     if ([...state.sessions.values()].some((session) => session.request || hasDraft(session))) {
       event.preventDefault();
@@ -1188,11 +1390,7 @@
     }
   });
   window.addEventListener("pagehide", () => {
-    state.stopped = true;
-    window.clearTimeout(state.pollTimer);
-    window.clearInterval(state.clock);
-    for (const controller of state.reads) controller.abort();
-    for (const session of state.sessions.values()) releaseAttachment(session);
+    clearAccountState();
   });
   window.addEventListener("pageshow", (event) => {
     // A restored bfcache page has already released its in-memory File URLs.
@@ -1200,10 +1398,30 @@
   });
 
   async function initialize() {
+    if (state.initializing || state.stopped) return;
+    state.initializing = true;
     setSidebar(false, false);
+    setBusy("loading", "Checking your account…");
+    $("auth-warning").hidden = true;
+    $("auth-retry").disabled = true;
+    try {
+      if (!await checkAccount()) return;
+    } catch (error) {
+      if (!state.stopped) {
+        $("auth-message").textContent = `Sign-in could not be checked. ${errorText(error)} No studio data has been requested.`;
+        $("auth-warning").hidden = false;
+        $("account-name").textContent = "Sign-in check unavailable";
+        $("settings-account").textContent = "Sign-in not confirmed";
+        $("auth-retry").disabled = false;
+        setBusy(null);
+      }
+      return;
+    } finally { state.initializing = false; }
+    if (state.stopped) return;
     setBusy("loading", "Opening your studio…");
     const activeId = storedChatId();
     const results = await Promise.allSettled([loadStatus(), loadHistory()]);
+    if (state.stopped) return;
     if (results[1].status === "rejected") showError(`Could not load saved history. ${errorText(results[1].reason)}`);
     try {
       if (activeId && state.historyLoaded && state.history.some((chat) => chat.id === activeId)) {

@@ -4,7 +4,7 @@ namespace ImageChat;
 
 // One SQLite database contains metadata AND image bytes so a backup stays consistent.
 // Storage is intentionally single-instance. Replace this service for horizontal cloud scaling.
-public sealed class ChatStore
+public sealed partial class ChatStore
 {
     private readonly string connectionString;
     public ChatStore(string directory)
@@ -23,6 +23,7 @@ public sealed class ChatStore
             UPDATE messages SET status='failed', error='The application restarted before this generation finished. You can submit the request again.' WHERE status='pending';
             """;
         command.ExecuteNonQuery();
+        InitializeTelemetry(db);
     }
 
     private SqliteConnection Open()
@@ -34,7 +35,7 @@ public sealed class ChatStore
     private static string Now() => DateTimeOffset.UtcNow.ToString("O");
     private static string ImageUrl(string id) => $"/api/images/{id}";
 
-    public List<ChatSummary> List()
+    public List<ChatSummary> List(string? ownerId = null)
     {
         using var db = Open();
         using var command = db.CreateCommand();
@@ -43,8 +44,9 @@ public sealed class ChatStore
                 (SELECT COUNT(*) FROM messages WHERE chat_id=c.id),
                 (SELECT id FROM messages WHERE chat_id=c.id AND image IS NOT NULL ORDER BY rowid DESC LIMIT 1),
                 EXISTS (SELECT 1 FROM messages WHERE chat_id=c.id AND status='pending')
-            FROM chats c ORDER BY c.updated_at DESC;
+            FROM chats c WHERE $owner IS NULL OR c.owner_id=$owner ORDER BY c.updated_at DESC;
             """;
+        command.Parameters.AddWithValue("$owner", (object?)ownerId ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         var result = new List<ChatSummary>();
         while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
@@ -52,12 +54,13 @@ public sealed class ChatStore
         return result;
     }
 
-    public Chat Create()
+    public Chat Create(string? ownerId = null)
     {
         var chat = new Chat(Guid.NewGuid().ToString("N"), "New chat", Now(), Now(), []);
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "INSERT INTO chats VALUES ($id,$title,$created,$updated)";
+        command.CommandText = "INSERT INTO chats (id,title,created_at,updated_at,owner_id) VALUES ($id,$title,$created,$updated,$owner)";
+        command.Parameters.AddWithValue("$owner", (object?)ownerId ?? DBNull.Value);
         command.Parameters.AddWithValue("$id", chat.Id);
         command.Parameters.AddWithValue("$title", chat.Title);
         command.Parameters.AddWithValue("$created", chat.CreatedAt);
@@ -66,12 +69,13 @@ public sealed class ChatStore
         return chat;
     }
 
-    public Chat Get(string id)
+    public Chat Get(string id, string? ownerId = null)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT title,created_at,updated_at FROM chats WHERE id=$id";
+        command.CommandText = "SELECT title,created_at,updated_at FROM chats WHERE id=$id AND ($owner IS NULL OR owner_id=$owner)";
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$owner", (object?)ownerId ?? DBNull.Value);
         Chat chat;
         using (var reader = command.ExecuteReader())
         {
@@ -86,12 +90,13 @@ public sealed class ChatStore
         return chat;
     }
 
-    public ImageData? GetImage(string id)
+    public ImageData? GetImage(string id, string? ownerId = null)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "SELECT image,content_type FROM messages WHERE id=$id AND image IS NOT NULL";
+        command.CommandText = "SELECT image,content_type FROM messages m JOIN chats c ON c.id=m.chat_id WHERE m.id=$id AND image IS NOT NULL AND ($owner IS NULL OR c.owner_id=$owner)";
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$owner", (object?)ownerId ?? DBNull.Value);
         using var reader = command.ExecuteReader();
         return reader.Read() ? new((byte[])reader[0], reader.GetString(1)) : null;
     }
@@ -102,7 +107,7 @@ public sealed class ChatStore
         return message == null ? null : GetImage(message.Id);
     }
 
-    public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment)
+    public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment, string? telemetryId = null, string operation = "unknown")
     {
         using var db = Open();
         using var transaction = db.BeginTransaction();
@@ -131,6 +136,16 @@ public sealed class ChatStore
         update.Parameters.AddWithValue("$now", Now());
         update.Parameters.AddWithValue("$id", chat.Id);
         update.ExecuteNonQuery();
+        if (telemetryId != null)
+        {
+            using var telemetry = db.CreateCommand();
+            telemetry.Transaction = transaction;
+            telemetry.CommandText = "UPDATE image_requests SET message_id=$message,operation=$operation WHERE id=$id";
+            telemetry.Parameters.AddWithValue("$message", assistantId);
+            telemetry.Parameters.AddWithValue("$operation", operation);
+            telemetry.Parameters.AddWithValue("$id", telemetryId);
+            telemetry.ExecuteNonQuery();
+        }
         transaction.Commit();
         return assistantId;
     }
@@ -151,18 +166,28 @@ public sealed class ChatStore
         command.Parameters.AddWithValue("$type", (object?)image?.ContentType ?? DBNull.Value);
         command.Parameters.AddWithValue("$now", Now());
         command.ExecuteNonQuery();
+        using var telemetry = db.CreateCommand();
+        telemetry.Transaction = transaction;
+        telemetry.CommandText = "UPDATE image_requests SET status=$status,image_count=$count,completed_ms=$now,http_status=$http WHERE message_id=$message AND status='pending'";
+        telemetry.Parameters.AddWithValue("$status", error == null ? "completed" : "failed");
+        telemetry.Parameters.AddWithValue("$count", error == null && image != null ? 1 : 0);
+        telemetry.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        telemetry.Parameters.AddWithValue("$http", error == null ? 200 : DBNull.Value);
+        telemetry.Parameters.AddWithValue("$message", messageId);
+        telemetry.ExecuteNonQuery();
         transaction.Commit();
     }
 
-    public void Delete(string id)
+    public void Delete(string id, string? ownerId = null)
     {
         using var db = Open();
         using var command = db.CreateCommand();
-        command.CommandText = "DELETE FROM chats WHERE id=$id AND NOT EXISTS (SELECT 1 FROM messages WHERE chat_id=$id AND status='pending')";
+        command.CommandText = "DELETE FROM chats WHERE id=$id AND ($owner IS NULL OR owner_id=$owner) AND NOT EXISTS (SELECT 1 FROM messages WHERE chat_id=$id AND status='pending')";
         command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$owner", (object?)ownerId ?? DBNull.Value);
         if (command.ExecuteNonQuery() == 0)
         {
-            Get(id);
+            Get(id, ownerId);
             throw new AppException(409, "Wait for image generation to finish before deleting this chat.");
         }
     }
