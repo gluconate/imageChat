@@ -1,6 +1,6 @@
 namespace ImageChat;
 
-public sealed record ChatSummary(string Id, string Title, string CreatedAt, string UpdatedAt, int MessageCount, string? ThumbnailUrl);
+public sealed record ChatSummary(string Id, string Title, string CreatedAt, string UpdatedAt, int MessageCount, string? ThumbnailUrl, bool IsGenerating = false);
 public sealed record Chat(string Id, string Title, string CreatedAt, string UpdatedAt, List<ChatMessage> Messages);
 public sealed record ChatMessage(string Id, string Role, string Text, string? ImageUrl, string CreatedAt,
     string Size, string Quality, string Status, string? Error);

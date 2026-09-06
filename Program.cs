@@ -17,7 +17,7 @@ builder.Services.AddHttpClient<IImageGenerator, FoundryClient>(http => http.Time
 builder.Services.AddSingleton(services => new ChatStore(Path.GetFullPath(
     services.GetRequiredService<IConfiguration>()["Storage:Directory"] ?? "data",
     services.GetRequiredService<IWebHostEnvironment>().ContentRootPath)));
-builder.Services.AddSingleton(new SemaphoreSlim(1, 1));
+builder.Services.AddSingleton<ChatOperations>();
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = InputRules.MaxImageBytes + 1024 * 1024);
 builder.Services.Configure<FormOptions>(f =>
 {
@@ -92,11 +92,11 @@ app.MapGet("/api/status", () => new { configured = options.ConfigurationError() 
 app.MapGet("/api/chats", (ChatStore store) => store.List());
 app.MapPost("/api/chats", (ChatStore store) => Results.Json(store.Create(), statusCode: 201));
 app.MapGet("/api/chats/{id}", (string id, ChatStore store) => store.Get(id));
-app.MapDelete("/api/chats/{id}", async (string id, ChatStore store, SemaphoreSlim gate) =>
+app.MapDelete("/api/chats/{id}", (string id, ChatStore store, ChatOperations operations) =>
 {
-    if (!await gate.WaitAsync(0)) throw new AppException(409, "Wait for image generation to finish before deleting a chat.");
-    try { store.Delete(id); return Results.NoContent(); }
-    finally { gate.Release(); }
+    using var operation = operations.Acquire(id);
+    store.Delete(id);
+    return Results.NoContent();
 });
 app.MapGet("/api/images/{id}", (string id, bool? download, ChatStore store) =>
 {
@@ -105,10 +105,10 @@ app.MapGet("/api/images/{id}", (string id, bool? download, ChatStore store) =>
     return Results.File(image.Bytes, image.ContentType, download == true ? $"image-{id}.{extension}" : null);
 });
 app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, ChatStore store,
-    IImageGenerator generator, SemaphoreSlim gate, IHostApplicationLifetime lifetime) =>
+    IImageGenerator generator, ChatOperations operations, IHostApplicationLifetime lifetime) =>
 {
     if (options.ConfigurationError() is { } configurationError) throw new AppException(503, configurationError);
-    if (!await gate.WaitAsync(0)) throw new AppException(409, "An image is already being generated. Wait for it to finish.");
+    using var operation = operations.Acquire(id);
     string? assistantId = null;
     try
     {
@@ -146,7 +146,6 @@ app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, C
                 "Generation was interrupted or failed. Check your connection and configuration. Retrying may incur another charge.");
         throw;
     }
-    finally { gate.Release(); }
 }).RequireRateLimiting("generation");
 
 app.Run();

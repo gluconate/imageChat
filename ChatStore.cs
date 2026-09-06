@@ -41,13 +41,14 @@ public sealed class ChatStore
         command.CommandText = """
             SELECT c.id, c.title, c.created_at, c.updated_at,
                 (SELECT COUNT(*) FROM messages WHERE chat_id=c.id),
-                (SELECT id FROM messages WHERE chat_id=c.id AND image IS NOT NULL ORDER BY rowid DESC LIMIT 1)
+                (SELECT id FROM messages WHERE chat_id=c.id AND image IS NOT NULL ORDER BY rowid DESC LIMIT 1),
+                EXISTS (SELECT 1 FROM messages WHERE chat_id=c.id AND status='pending')
             FROM chats c ORDER BY c.updated_at DESC;
             """;
         using var reader = command.ExecuteReader();
         var result = new List<ChatSummary>();
         while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
-            reader.GetInt32(4), reader.IsDBNull(5) ? null : ImageUrl(reader.GetString(5))));
+            reader.GetInt32(4), reader.IsDBNull(5) ? null : ImageUrl(reader.GetString(5)), reader.GetBoolean(6)));
         return result;
     }
 

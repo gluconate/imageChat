@@ -13,7 +13,8 @@ $env:TMP = $env:TEMP
 New-Item -ItemType Directory -Force $env:TEMP | Out-Null
 switch ($Action) {
     'run' { dotnet run --project ImageChat.csproj --no-launch-profile }
-    'test' { dotnet test tests/ImageChat.Tests.csproj }
+    # Keep tests separate from the running Debug server's locked Windows apphost.
+    'test' { dotnet test tests/ImageChat.Tests.csproj -c Release }
     'build' { dotnet build ImageChat.csproj }
     'publish' { dotnet publish ImageChat.csproj -c Release -o .cache/publish }
 }

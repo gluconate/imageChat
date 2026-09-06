@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using ImageChat;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -93,6 +95,139 @@ public class ApiTests
         Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
     }
 
+    [Fact]
+    public async Task DifferentChatsGenerateConcurrentlyAndFinishIndependently()
+    {
+        await using var factory = new AppFactory();
+        using var http = factory.CreateClient();
+        http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
+        var a = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+        var b = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+        var completeA = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completeB = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Generator.Handler = input => input.Prompt == "Scene A" ? completeA.Task : completeB.Task;
+        using var formA = Form("Scene A");
+        using var formB = Form("Scene B");
+        var requestA = http.PostAsync($"/api/chats/{a.Id}/messages", formA);
+        var requestB = http.PostAsync($"/api/chats/{b.Id}/messages", formB);
+        try
+        {
+            // Both must enter the model before either model response is released.
+            var first = await factory.Generator.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            var second = await factory.Generator.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.NotEqual(first.Prompt, second.Prompt);
+            Assert.False(requestA.IsCompleted);
+            Assert.False(requestB.IsCompleted);
+            var summaries = (await http.GetFromJsonAsync<List<ChatSummary>>("/api/chats"))!;
+            Assert.All(summaries, summary => Assert.True(summary.IsGenerating));
+            Assert.All(summaries, summary => Assert.Equal(2, summary.MessageCount));
+
+            // Complete B first, while A remains pending. No cross-chat image/history contamination.
+            completeB.SetResult(new(CoreTests.Png, "image/png"));
+            var responseB = await requestB.WaitAsync(TimeSpan.FromSeconds(10));
+            responseB.EnsureSuccessStatusCode();
+            var resultB = (await responseB.Content.ReadFromJsonAsync<Chat>())!;
+            Assert.Equal(b.Id, resultB.Id);
+            Assert.Equal("Scene B", resultB.Messages[0].Text);
+            Assert.Equal("completed", resultB.Messages[1].Status);
+            Assert.Equal("pending", (await http.GetFromJsonAsync<Chat>($"/api/chats/{a.Id}"))!.Messages[1].Status);
+            Assert.False(requestA.IsCompleted);
+            summaries = (await http.GetFromJsonAsync<List<ChatSummary>>("/api/chats"))!;
+            Assert.True(summaries.Single(s => s.Id == a.Id).IsGenerating);
+            Assert.False(summaries.Single(s => s.Id == b.Id).IsGenerating);
+
+            completeA.SetResult(new(CoreTests.Png, "image/png"));
+            (await requestA.WaitAsync(TimeSpan.FromSeconds(10))).EnsureSuccessStatusCode();
+            Assert.All((await http.GetFromJsonAsync<List<ChatSummary>>("/api/chats"))!, summary => Assert.False(summary.IsGenerating));
+        }
+        finally
+        {
+            completeA.TrySetResult(new(CoreTests.Png, "image/png"));
+            completeB.TrySetResult(new(CoreTests.Png, "image/png"));
+            await Task.WhenAll(requestA, requestB).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Fact]
+    public async Task BusyChatRejectsDuplicateAndDeletionButAllowsOtherChatOperations()
+    {
+        await using var factory = new AppFactory();
+        using var http = factory.CreateClient();
+        http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
+        var busy = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+        var finish = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Generator.Handler = _ => finish.Task;
+        using var original = Form("Keep this turn");
+        var pending = http.PostAsync($"/api/chats/{busy.Id}/messages", original);
+        try
+        {
+            await factory.Generator.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            using var duplicate = Form("Do not append this");
+            Assert.Equal(HttpStatusCode.Conflict, (await http.PostAsync($"/api/chats/{busy.Id}/messages", duplicate)).StatusCode);
+            Assert.Equal(HttpStatusCode.Conflict, (await http.DeleteAsync($"/api/chats/{busy.Id}")).StatusCode);
+            Assert.Single(factory.Generator.Inputs);
+            Assert.Equal(2, (await http.GetFromJsonAsync<Chat>($"/api/chats/{busy.Id}"))!.Messages.Count);
+
+            var other = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+            Assert.Equal(HttpStatusCode.NoContent, (await http.DeleteAsync($"/api/chats/{other.Id}")).StatusCode);
+            Assert.False(pending.IsCompleted);
+            finish.SetResult(new(CoreTests.Png, "image/png"));
+            (await pending.WaitAsync(TimeSpan.FromSeconds(10))).EnsureSuccessStatusCode();
+
+            factory.Generator.Handler = null;
+            using var followup = Form("Now continue");
+            (await http.PostAsync($"/api/chats/{busy.Id}/messages", followup)).EnsureSuccessStatusCode();
+            Assert.Equal(4, (await http.GetFromJsonAsync<Chat>($"/api/chats/{busy.Id}"))!.Messages.Count);
+            Assert.Equal(HttpStatusCode.NoContent, (await http.DeleteAsync($"/api/chats/{busy.Id}")).StatusCode);
+        }
+        finally
+        {
+            finish.TrySetResult(new(CoreTests.Png, "image/png"));
+            await pending.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedOrCancelledGenerationReleasesItsChatWithoutBlockingAnother(bool cancelled)
+    {
+        await using var factory = new AppFactory();
+        using var http = factory.CreateClient();
+        http.DefaultRequestHeaders.Add("X-ImageChat-Request", "1");
+        var a = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+        var b = (await (await http.PostAsJsonAsync("/api/chats", new { })).Content.ReadFromJsonAsync<Chat>())!;
+        var finishA = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishB = new TaskCompletionSource<ImageData>(TaskCreationOptions.RunContinuationsAsynchronously);
+        factory.Generator.Handler = input => input.Prompt == "A" ? finishA.Task : finishB.Task;
+        using var formA = Form("A");
+        using var formB = Form("B");
+        var requestA = http.PostAsync($"/api/chats/{a.Id}/messages", formA);
+        var requestB = http.PostAsync($"/api/chats/{b.Id}/messages", formB);
+        try
+        {
+            await factory.Generator.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            await factory.Generator.Started.Reader.ReadAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            if (cancelled) finishA.SetCanceled();
+            else finishA.SetException(new AppException(502, "Safe concurrent failure"));
+            Assert.Equal(cancelled ? HttpStatusCode.GatewayTimeout : HttpStatusCode.BadGateway,
+                (await requestA.WaitAsync(TimeSpan.FromSeconds(10))).StatusCode);
+            Assert.Equal("failed", (await http.GetFromJsonAsync<Chat>($"/api/chats/{a.Id}"))!.Messages[1].Status);
+            Assert.False(requestB.IsCompleted);
+
+            factory.Generator.Handler = _ => Task.FromResult(new ImageData(CoreTests.Png, "image/png"));
+            using var retry = Form("Retry A");
+            (await http.PostAsync($"/api/chats/{a.Id}/messages", retry)).EnsureSuccessStatusCode();
+            Assert.False(requestB.IsCompleted);
+        }
+        finally
+        {
+            finishA.TrySetResult(new(CoreTests.Png, "image/png"));
+            finishB.TrySetResult(new(CoreTests.Png, "image/png"));
+            await Task.WhenAll(requestA, requestB).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
     public static MultipartFormDataContent Form(string prompt, bool usePrevious = true)
     {
         var form = new MultipartFormDataContent();
@@ -138,13 +273,18 @@ public class ApiTests
     }
     private sealed class FakeGenerator : IImageGenerator
     {
-        public List<GenerationInput> Inputs { get; } = [];
+        private readonly ConcurrentQueue<GenerationInput> inputs = new();
+        public GenerationInput[] Inputs => inputs.ToArray();
+        public Channel<GenerationInput> Started { get; } = Channel.CreateUnbounded<GenerationInput>();
+        public Func<GenerationInput, Task<ImageData>>? Handler { get; set; }
         public bool Fail { get; set; }
         public Task<ImageData> GenerateAsync(GenerationInput input, CancellationToken cancellationToken)
         {
-            Inputs.Add(input);
+            inputs.Enqueue(input);
+            var handler = Handler;
+            Started.Writer.TryWrite(input);
             if (Fail) throw new AppException(502, "Safe failure");
-            return Task.FromResult(new ImageData(CoreTests.Png, "image/png"));
+            return handler == null ? Task.FromResult(new ImageData(CoreTests.Png, "image/png")) : handler(input);
         }
     }
 }

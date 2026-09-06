@@ -77,9 +77,16 @@ svg { flex-shrink: 0; }
 .chat-select { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 12px 3px 12px 10px; background: none; color: #e1e3d9; text-align: left; border-radius: 8px; }
 .chat-thumb { width: 32px; height: 36px; flex-shrink: 0; border-radius: 5px; background: #44483d; object-fit: cover; display: grid; place-items: center; color: #bec4b4; }
 .chat-thumb .icon { width: 16px; height: 16px; }
+.chat-thumb img { width: 32px; height: 36px; object-fit: cover; border-radius: 5px; }
 .chat-summary { min-width: 0; }
 .chat-summary strong { font-size: 12px; font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-summary small { display: block; font-size: 10px; color: #b4b9aa; margin-top: 4px; }
+.chat-badge { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; margin-top: 6px; padding: 2px 6px; border: 1px solid #66715b; border-radius: 5px; color: #d0d7c5; font-size: 10px; font-variant-numeric: tabular-nums; }
+.chat-badge.is-pending { color: #ffcfaa; background: #49382b; border-color: #85644b; }
+.chat-badge.is-pending::before { content: ""; width: 7px; height: 7px; border: 1px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; flex-shrink: 0; }
+.chat-badge.is-completed { color: #d0e5bd; }
+.chat-badge.is-failed { color: #ffd0c4; border-color: #966b60; }
+.sync-status { color: #b4b9aa; font-size: 10px; line-height: 1.7; margin: 15px 8px 0; }
 .chat-delete { flex-shrink: 0; width: 31px; color: #b8bdaf; margin-right: 3px; }
 .chat-delete .icon { width: 15px; height: 15px; }
 .history-empty { color: #b4b9aa; font-size: 12px; padding: 18px 9px; line-height: 1.8; }
@@ -224,6 +231,8 @@ svg { flex-shrink: 0; }
 .generation-progress strong span { color: #7a7d68; margin-left: 6px; font-variant-numeric: tabular-nums; }
 .generation-progress p { font-size: 10px; color: #6e735f; line-height: 1.7; margin-top: 3px; }
 .recovery-notice { margin-bottom: 10px; }
+.recovery-actions { display: flex; flex-direction: column; align-items: flex-start; flex-shrink: 0; gap: 4px; }
+.recovery-actions .text-button { white-space: normal; text-align: left; }
 .spinner { display: inline-block; width: 15px; height: 15px; border: 2px solid #b4b69c; border-top-color: #7e5935; border-radius: 50%; flex-shrink: 0; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes arrive { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }

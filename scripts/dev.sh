@@ -10,7 +10,7 @@ export TMPDIR="$PWD/.cache/tmp"
 mkdir -p "$TMPDIR"
 case "${1:-run}" in
   run) dotnet run --project ImageChat.csproj --no-launch-profile ;;
-  test) dotnet test tests/ImageChat.Tests.csproj ;;
+  test) dotnet test tests/ImageChat.Tests.csproj -c Release ;;
   build) dotnet build ImageChat.csproj ;;
   publish) dotnet publish ImageChat.csproj -c Release -o .cache/publish ;;
   *) echo 'Usage: sh scripts/dev.sh [run|test|build|publish]' >&2; exit 1 ;;

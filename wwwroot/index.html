@@ -49,10 +49,12 @@
       <div class="history-heading"><h2 id="history-heading">Recent chats</h2><button id="refresh-history" class="icon-button" aria-label="Refresh chat history" title="Refresh history" disabled><svg class="icon"><use href="#i-refresh"/></svg></button></div>
       <p id="history-empty" class="history-empty">Loading your conversations…</p>
       <ul id="chat-list" class="chat-list" aria-label="Saved conversations"></ul>
+      <p id="sync-status" class="sync-status" role="status">Saved results are checked automatically.</p>
+      <p id="history-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     </section>
     <div class="sidebar-footer">
       <div class="local-label"><span class="local-dot" aria-hidden="true"></span>Saved locally. Yours to revisit.</div>
-      <p>Sessions live on the machine running this app, not just in this browser.</p>
+      <p>Saved sessions live on the host machine. Unsent drafts stay only in this tab until it closes or reloads.</p>
       <div class="sidebar-signoff"><span>A space for your next idea.</span><span aria-hidden="true">✳</span></div>
     </div>
   </aside>
@@ -74,7 +76,7 @@
       <section id="welcome" class="welcome" aria-labelledby="welcome-title">
         <div class="welcome-eyebrow"><span class="tiny-frame" aria-hidden="true"></span>BIG IDEAS START WITH A LITTLE WHAT IF.</div>
         <h1 id="welcome-title" tabindex="-1">Make room for<br><em>imagination.</em></h1>
-        <p class="welcome-description">An idea, a few words, a new possibility.<br>Describe what’s on your mind. Let’s see where it goes.</p>
+        <p class="welcome-description">An idea, a few words, a new possibility.<br>Explore several chats at once. Each keeps its own draft while images are being made.</p>
         <div class="inspiration-heading"><span>A PLACE TO START</span><span>Make it your own <span aria-hidden="true">↙</span></span></div>
         <div class="suggestion-grid">
           <button class="suggestion" data-prompt="A sculptural terracotta vase with a single curved branch, warm afternoon light, soft peach background, editorial still life photography, subtle film grain.">
@@ -100,8 +102,8 @@
     </div>
 
     <section class="composer-dock" aria-label="Create an image">
-      <div id="generation-progress" class="generation-progress" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Making space for your idea… <span id="generation-elapsed" aria-hidden="true">0:00</span></strong><p>Generation can take up to 5 minutes. Keep this tab open. New chat, selection, and deletion are paused.</p></div></div>
-      <div id="recovery-notice" class="notice notice-warning recovery-notice" role="status" hidden><div><strong>The result hasn’t been confirmed.</strong><p id="recovery-text">Your draft is safe. Check the saved result before retrying to avoid creating a duplicate. Keep this tab open; navigation is paused.</p></div><button id="check-result" class="text-button">Check saved result</button></div>
+      <div id="generation-progress" class="generation-progress" role="status" hidden><span class="spinner" aria-hidden="true"></span><div><strong>Making space for your idea… <span id="generation-elapsed" aria-hidden="true">0:00</span></strong><p>Generation can take up to 5 minutes. You can switch or start other chats now. Each chat allows one turn at a time; saved results are checked automatically.</p></div></div>
+      <div id="recovery-notice" class="notice notice-warning recovery-notice" role="status" hidden><div><strong>This chat’s result hasn’t been confirmed.</strong><p id="recovery-text">Your draft is kept in this tab. Check the saved result before retrying; you can still switch or start other chats.</p></div><div class="recovery-actions"><button id="check-result" class="text-button">Check saved result</button><button id="resume-draft" class="text-button" hidden>Result reviewed · keep draft</button></div></div>
       <form id="composer" class="composer" novalidate>
         <div class="drop-hint" aria-hidden="true"><svg class="icon"><use href="#i-attach"/></svg>Drop one PNG or JPEG here</div>
         <div id="attachment-preview" class="attachment-preview" hidden><img id="attachment-image" alt="Attached image preview"><div><strong id="attachment-name"></strong><span id="attachment-size"></span></div><button id="attachment-remove" type="button" class="icon-button" aria-label="Remove attached image"><svg class="icon"><use href="#i-close"/></svg></button></div>
@@ -117,7 +119,7 @@
         <div class="composer-bottom"><div class="attachment-controls"><input id="image-input" class="sr-only" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" aria-label="Attach one PNG or JPEG, up to 20 MB" tabindex="-1" disabled><button id="attach-button" type="button" class="attach-button" disabled><svg class="icon" aria-hidden="true"><use href="#i-attach"/></svg><span>Add image</span></button><span class="attachment-limit">PNG / JPEG · up to 20 MB</span></div><button id="send-button" type="submit" class="send-button" disabled><span id="send-label">Generate</span><svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
       </form>
       <p id="composer-error" class="composer-error" role="alert" hidden></p>
-      <div id="composer-help" class="composer-help"><span>Drop or paste one image · Enter to send · Shift + Enter for a new line</span><span>Images are sent to <strong>Microsoft Foundry</strong>. Sessions are stored locally.</span></div>
+      <div id="composer-help" class="composer-help"><span>Drop or paste one image · Enter to send · Shift + Enter for a new line</span><span>Drafts stay in this tab, including when switching chats. Reloading or closing clears them.</span><span>Generate in different chats at once · Up to 5 attempts/minute across chats</span><span>Images are sent to <strong>Microsoft Foundry</strong>. Saved sessions are stored on the host.</span></div>
     </section>
     <noscript><p class="notice notice-error">Frame needs JavaScript to load chats and generate images. Enable JavaScript to use the studio.</p></noscript>
   </main>
@@ -126,7 +128,8 @@
     <div class="dialog-heading"><div><span class="dialog-eyebrow">YOUR STUDIO</span><h2 id="settings-title">A little behind the scenes.</h2></div><button class="icon-button" data-close="settings-dialog" aria-label="Close settings" autofocus><svg class="icon"><use href="#i-close"/></svg></button></div>
     <section class="settings-section"><div class="settings-section-heading"><h3>Backend readiness</h3><button id="refresh-status" class="text-button"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Check again</button></div><p id="settings-readiness" class="readiness" role="status">Checking configuration…</p><dl class="config-details"><div><dt>Deployment</dt><dd id="settings-deployment">Not reported</dd></div><div><dt>Authentication</dt><dd id="settings-auth">Not reported</dd></div></dl><p id="settings-message" class="settings-message"></p><p>Configuration is not a connectivity test. A configured backend may still encounter authentication, quota, model, or service errors.</p></section>
     <section class="settings-section"><h3>Configuration stays on the server.</h3><p>Set the Microsoft Foundry endpoint, image deployment, and authentication in the backend’s configuration. This frontend reads readiness from the backend; it never asks for API keys, tokens, or other secrets.</p></section>
-    <section class="settings-section privacy-section"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><div><h3>Your ideas, and where they go.</h3><p>Prompts and attached or reused images leave this machine and are sent to Microsoft Foundry for image generation. Chats and generated images are saved locally on the machine hosting the backend. Only the selected chat ID is kept in this browser’s local storage.</p><p>“Use latest image” reuses the latest successfully generated image in this chat. A new attachment replaces that reference. Earlier successful prompts remain context; use New chat for a clean start. Image-only uploads create a variation using the default prompt shown in the composer. Each request produces one output. Assistant captions are app-generated, not text responses from GPT-image-2.</p></div></section>
+    <section class="settings-section"><h3>More than one idea at a time.</h3><p>Switch or start another chat while an image is generating. Each chat has its own prompt, quality, size, image reuse setting and attachment, and allows one outstanding turn. Running chats cannot be deleted; other chats can. The shared limit is 5 generation attempts per minute.</p><p>The sidebar shows running, completed, failed and unconfirmed results. Saved results are checked automatically, including after reopening the page. Generation continues on the server if this browser disconnects. An interrupted response is never automatically retried; check its saved result before sending again.</p></section>
+    <section class="settings-section privacy-section"><svg class="icon" aria-hidden="true"><use href="#i-spark"/></svg><div><h3>Your ideas, and where they go.</h3><p>Prompts and attached or reused images leave this machine and are sent to Microsoft Foundry for image generation. Chats and generated images are saved locally on the machine hosting the backend. Only the selected chat ID is kept in this browser’s local storage. Unsent drafts and attachments remain in memory in this tab when switching chats or visiting the welcome screen; they are not shared with other tabs. Closing or reloading this page loses them. Successful confirmed submissions clear their own prompt and attachment; failures keep them for review.</p><p>“Use latest image” reuses the latest successfully generated image in this chat. A new attachment replaces that reference. Earlier successful prompts remain context; use New chat for a clean start. Image-only uploads create a variation using the default prompt shown in the composer. Each request produces one output. Assistant captions are app-generated, not text responses from GPT-image-2.</p></div></section>
     <div class="dialog-footer"><button class="primary-button" data-close="settings-dialog">Back to creating</button></div>
   </dialog>
 
