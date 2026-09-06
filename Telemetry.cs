@@ -7,7 +7,7 @@ namespace ImageChat;
 public sealed record TelemetrySummary(long Requests, long GeneratedImages, long EditedImages, long LegacyImages,
     long TotalImages, long Failed, long Rejected, long Pending);
 public sealed record TelemetryItem(string Id, string? UserId, string? Username, string? Ip, string RequestedAt,
-    string? CompletedAt, string Operation, string Status, long ImageCount, int? HttpStatus);
+    string? CompletedAt, string Operation, string Status, long ImageCount, int? HttpStatus, string? Model = null, string? Deployment = null);
 public sealed record TelemetryReport(TelemetrySummary Summary, List<TelemetryItem> Items, int Page, int PageSize, long Total);
 public sealed record TelemetryFilter(long? From, long? To, string? Ip, int Page = 1, int PageSize = 50)
 {
@@ -67,6 +67,8 @@ public sealed partial class ChatStore
             """;
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         command.ExecuteNonQuery();
+        EnsureColumn(db, "image_requests", "model");
+        EnsureColumn(db, "image_requests", "deployment");
         // Existing output records have no reliable source IP or generation-vs-edit metadata.
         // Backfill once, explicitly labelled legacy, without inventing request information.
         using var transaction = db.BeginTransaction();
@@ -93,6 +95,28 @@ public sealed partial class ChatStore
         using var command = db.CreateCommand();
         command.CommandText = "UPDATE chats SET owner_id=$owner WHERE owner_id IS NULL";
         command.Parameters.AddWithValue("$owner", ownerId);
+        command.ExecuteNonQuery();
+    }
+
+    private static void EnsureColumn(SqliteConnection db, string table, string column)
+    {
+        // table/column names are internal constants, never HTTP inputs.
+        using var command = db.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({table})";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) if (reader.GetString(1) == column) return;
+        command.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} TEXT";
+        command.ExecuteNonQuery();
+    }
+
+    public void SetRequestModel(string requestId, string model, string deployment)
+    {
+        using var db = Open();
+        using var command = db.CreateCommand();
+        command.CommandText = "UPDATE image_requests SET model=$model,deployment=$deployment WHERE id=$id";
+        command.Parameters.AddWithValue("$id", requestId);
+        command.Parameters.AddWithValue("$model", model);
+        command.Parameters.AddWithValue("$deployment", deployment);
         command.ExecuteNonQuery();
     }
 
@@ -159,7 +183,7 @@ public sealed partial class ChatStore
             summary = new(reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3),
                 reader.GetInt64(4), reader.GetInt64(5), reader.GetInt64(6), reader.GetInt64(7));
         }
-        command.CommandText = "SELECT id,user_id,username,ip,requested_ms,completed_ms,operation,status,image_count,http_status FROM image_requests" + where +
+        command.CommandText = "SELECT id,user_id,username,ip,requested_ms,completed_ms,operation,status,image_count,http_status,model,deployment FROM image_requests" + where +
             " ORDER BY requested_ms DESC,id DESC LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", filter.PageSize);
         command.Parameters.AddWithValue("$offset", (long)(filter.Page - 1) * filter.PageSize);
@@ -169,7 +193,8 @@ public sealed partial class ChatStore
             items.IsDBNull(2) ? null : items.GetString(2), items.IsDBNull(3) ? null : items.GetString(3),
             DateTimeOffset.FromUnixTimeMilliseconds(items.GetInt64(4)).ToString("O"),
             items.IsDBNull(5) ? null : DateTimeOffset.FromUnixTimeMilliseconds(items.GetInt64(5)).ToString("O"),
-            items.GetString(6), items.GetString(7), items.GetInt64(8), items.IsDBNull(9) ? null : items.GetInt32(9)));
+            items.GetString(6), items.GetString(7), items.GetInt64(8), items.IsDBNull(9) ? null : items.GetInt32(9),
+            items.IsDBNull(10) ? null : items.GetString(10), items.IsDBNull(11) ? null : items.GetString(11)));
         return new(summary, result, filter.Page, filter.PageSize, summary.Requests);
     }
 }

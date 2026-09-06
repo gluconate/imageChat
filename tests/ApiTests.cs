@@ -243,6 +243,7 @@ public class ApiTests
         public bool BootstrapAccounts { get; set; } = true;
         public bool TrustTestProxy { get; set; }
         public bool RequireHttps { get; set; }
+        public FoundryOptions ModelOptions { get; } = new() { Endpoint = "https://example.test", ApiKey = "not-a-real-key" };
         public string DataDirectory { get; } = Path.Combine(FindRepo(), ".cache", "test-data", Guid.NewGuid().ToString("N"));
         public FakeGenerator Generator { get; } = new();
         public async Task<HttpClient> CreateAuthenticatedClient(string username = "testadmin", string password = TestPassword)
@@ -290,7 +291,7 @@ public class ApiTests
                 });
                 services.AddSingleton<IStartupFilter, TestRemoteAddress>();
                 services.RemoveAll<FoundryOptions>();
-                services.AddSingleton(new FoundryOptions { Endpoint = "https://example.test", ApiKey = "not-a-real-key" });
+                services.AddSingleton(ModelOptions);
                 services.RemoveAll<ChatStore>();
                 services.AddSingleton(_ => new ChatStore(DataDirectory));
                 services.RemoveAll<IImageGenerator>();

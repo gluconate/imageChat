@@ -29,6 +29,12 @@
     return Number.isNaN(date.getTime()) ? "Unavailable" : dates.format(date);
   }
 
+  function modelLabel(id) {
+    if (id === "gpt-image-2") return "GPT-image-2";
+    if (id === "mai-image-2.5-flash") return "MAI-Image-2.5-Flash (Preview)";
+    return typeof id === "string" && id.trim() && !/^gpt$/i.test(id.trim()) ? id : "Legacy / unknown model";
+  }
+
   function clearSelection() {
     try { localStorage.removeItem("frame.activeChatId"); } catch { /* Storage is optional. */ }
   }
@@ -142,6 +148,7 @@
       const row = node("tr");
       const operation = item.operation === "generation" ? "Generation" : item.operation === "edit" ? "Edit" : "Legacy / unknown";
       for (const value of [formatTime(item.requestedAt), formatTime(item.completedAt), item.username || "Historical / unavailable", item.ip || "Unavailable", operation]) row.append(node("td", value));
+      row.append(node("td", modelLabel(item.model)), node("td", typeof item.deployment === "string" && item.deployment.trim() ? item.deployment : "Not recorded"));
       const status = node("td");
       const statusName = ["pending", "completed", "failed", "rejected", "interrupted", "legacy"].includes(item.status) ? item.status : "unknown";
       const className = ["failed", "rejected", "interrupted"].includes(statusName) ? " problem" : statusName === "pending" ? " pending" : "";

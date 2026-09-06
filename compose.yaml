@@ -10,6 +10,10 @@ services:
       Foundry__AuthMode: ${FOUNDRY_AUTH_MODE:-ApiKey}
       Foundry__ApiStyle: ${FOUNDRY_API_STYLE:-deployments}
       Foundry__ApiVersion: ${FOUNDRY_API_VERSION:-2025-04-01-preview}
+      Foundry__Mai__Endpoint: ${MAI_ENDPOINT:-}
+      Foundry__Mai__Deployment: ${MAI_DEPLOYMENT:-mai-image-2.5-flash}
+      Foundry__Mai__AuthMode: ${MAI_AUTH_MODE:-ApiKey}
+      Foundry__Mai__ApiKey: ${MAI_API_KEY:-}
     volumes:
       - imagechat-data:/app/data
     restart: unless-stopped

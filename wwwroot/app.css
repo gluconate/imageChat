@@ -164,10 +164,11 @@ svg { flex-shrink: 0; }
 .conversation { max-width: 920px; margin: 0 auto; padding: 36px 36px 24px; }
 .messages { display: flex; flex-direction: column; gap: 33px; }
 .message { min-width: 0; animation: arrive .22s ease-out; }
-.message-header { display: flex; align-items: center; gap: 9px; margin-bottom: 11px; }
+.message-header { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; margin-bottom: 11px; }
 .message-avatar { width: 27px; height: 27px; border-radius: 7px; display: grid; place-items: center; background: #e9e9df; color: #696d5d; font-size: 11px; font-weight: 600; }
 .message-assistant .message-avatar { background: #ed794e; color: #342c22; font-size: 19px; }
 .message-author { font-size: 12px; font-weight: 600; }
+.message-model { min-width: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 10px; color: #626950; background: #eeeee3; border: 1px solid #dedfd1; border-radius: 5px; padding: 2px 6px; }
 .message-time { color: #7b7d71; font-size: 10px; }
 .message-content { padding-left: 36px; }
 .message-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; font-size: 13px; }
@@ -201,6 +202,12 @@ svg { flex-shrink: 0; }
 .select-control { display: flex; align-items: center; gap: 5px; font-size: 11px; }
 .select-control label { color: #777a6a; }
 .select-control select { background: #f3f3ec; border: 1px solid #e9e9df; border-radius: 5px; color: #515748; font-size: 11px; padding: 5px 20px 5px 7px; min-height: 30px; max-width: 152px; }
+.composer-model { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 10px; }
+.model-control { min-width: 0; max-width: 100%; }
+.model-control select { min-width: 0; max-width: 100%; flex: 1; }
+.model-readiness { font-size: 10px; color: #526348; }
+.model-readiness.not-ready { color: #96421f; }
+.model-help { color: #656b5a; font-size: 11px; line-height: 1.7; margin: -2px 0 12px; overflow-wrap: anywhere; }
 .reuse-control { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #656b5a; cursor: pointer; }
 .reuse-control input { accent-color: #777e5e; width: 14px; height: 14px; margin: 0; }
 .output-count { font-size: 10px; color: #797e6c; margin-left: auto; }

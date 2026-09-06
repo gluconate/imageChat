@@ -5,6 +5,19 @@
   const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
   const ACTIVE_CHAT_KEY = "frame.activeChatId";
   const POLL_MS = 3000;
+  const GPT_MODEL = "gpt-image-2";
+  const MAI_MODEL = "mai-image-2.5-flash";
+  // Local capabilities keep both choices visible when readiness is unavailable.
+  // Readiness is always taken from the selected model, never another deployment.
+  const MODEL_DEFAULTS = new Map([
+    [GPT_MODEL, { id: GPT_MODEL, label: "GPT-image-2", supportsEditing: true,
+      sizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "3840x2160"],
+      editSizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "3840x2160"],
+      qualities: ["low", "medium", "high"] }],
+    [MAI_MODEL, { id: MAI_MODEL, label: "MAI-Image-2.5-Flash (Preview)", supportsEditing: true,
+      sizes: ["1024x1024", "768x1024", "1024x768", "768x1365", "1365x768"],
+      editSizes: ["auto"], qualities: ["default"] }]
+  ]);
   const $ = (id) => document.getElementById(id);
   const mobile = matchMedia("(max-width: 800px)");
   const state = {
@@ -18,7 +31,7 @@
   };
 
   function newDraft() {
-    return { prompt: "", quality: "medium", size: "1024x1024", useLatest: true,
+    return { prompt: "", model: GPT_MODEL, quality: "medium", size: "1024x1024", useLatest: true,
       attachment: null, attachmentUrl: null, version: 0 };
   }
 
@@ -55,6 +68,80 @@
 
   function text(value, fallback = "") {
     return typeof value === "string" && value.trim() ? value : fallback;
+  }
+
+  function modelLabel(id) {
+    return MODEL_DEFAULTS.get(id)?.label || (text(id) && !/^gpt$/i.test(id.trim()) ? id : "Legacy / unknown model");
+  }
+
+  function modelStatus(id) {
+    return state.status?.models.find((model) => model.id === id) || null;
+  }
+
+  function effectiveEdit(session) {
+    return Boolean(session.draft.attachment || (session.draft.useLatest && session.chat?.messages.some(
+      (message) => message.role === "assistant" && message.status === "completed" && message.imageUrl)));
+  }
+
+  function normalizeDraft(session) {
+    const draft = session.draft;
+    const model = modelStatus(draft.model) || MODEL_DEFAULTS.get(draft.model);
+    if (!model) return;
+    const sizes = effectiveEdit(session) ? model.editSizes : model.sizes;
+    if (!sizes.includes(draft.size)) draft.size = sizes.includes("1024x1024") ? "1024x1024" : sizes[0];
+    if (!model.qualities.includes(draft.quality)) draft.quality = model.qualities.includes("medium") ? "medium" : model.qualities[0];
+    // Context-driven normalization is not a user edit: it must not prevent the
+    // originating successful request from clearing its prompt and attachment.
+  }
+
+  function selectOptions(id, options, value) {
+    const select = $(id);
+    const signature = JSON.stringify(options);
+    if (select.dataset.options !== signature) {
+      select.replaceChildren(...options.map(([key, label]) => {
+        const option = element("option", "", label);
+        option.value = key;
+        return option;
+      }));
+      select.dataset.options = signature;
+    }
+    select.value = value;
+  }
+
+  function renderModelControls(session) {
+    normalizeDraft(session);
+    const draft = session.draft;
+    const model = modelStatus(draft.model) || MODEL_DEFAULTS.get(draft.model);
+    selectOptions("model", [...MODEL_DEFAULTS.values()].map((item) => [item.id, text(modelStatus(item.id)?.label, item.label)]), draft.model);
+    if (!model) return;
+    const sizes = effectiveEdit(session) ? model.editSizes : model.sizes;
+    selectOptions("size", sizes.map((size) => [size, size === "auto" ? "Model determined" : size.replaceAll("x", " × ")]), draft.size);
+    selectOptions("quality", model.qualities.map((quality) => [quality, quality === "default" ? "Model default" : quality[0].toUpperCase() + quality.slice(1)]), draft.quality);
+    $("model-help").hidden = draft.model !== MAI_MODEL;
+  }
+
+  function publicStatus(status) {
+    if (!status || typeof status.configured !== "boolean" || (status.models !== undefined && !Array.isArray(status.models))) {
+      throw new Error("The backend returned an invalid readiness response.");
+    }
+    // An older backend reports only GPT readiness. MAI remains selectable but
+    // unavailable; never inherit the legacy top-level configuration for it.
+    const models = status.models === undefined ? [{ ...MODEL_DEFAULTS.get(GPT_MODEL), ...status, id: GPT_MODEL }] : status.models;
+    const ids = new Set();
+    const safeModels = models.map((model) => {
+      const defaults = MODEL_DEFAULTS.get(model?.id);
+      if (!defaults || ids.has(model.id) || typeof model.configured !== "boolean" || typeof model.supportsEditing !== "boolean" ||
+          ["sizes", "editSizes", "qualities"].some((key) => !Array.isArray(model[key]) || !model[key].length ||
+            model[key].some((value) => !defaults[key].includes(value)))) {
+        throw new Error("The backend returned invalid model capabilities. Check readiness again before generating.");
+      }
+      ids.add(model.id);
+      // Keep only public fields. Do not retain or render endpoints or secrets.
+      return { id: model.id, label: text(model.label, defaults.label), configured: model.configured,
+        deployment: text(model.deployment), authMode: text(model.authMode), message: text(model.message),
+        supportsEditing: model.supportsEditing, sizes: [...model.sizes], editSizes: [...model.editSizes], qualities: [...model.qualities] };
+    });
+    return { models: safeModels };
   }
 
   function errorText(error) {
@@ -350,14 +437,20 @@
     const session = activeSession();
     const request = session.request;
     const disabled = locked();
+    renderModelControls(session);
+    const selected = modelStatus(session.draft.model);
+    const configured = selected?.configured === true;
+    const editingUnsupported = effectiveEdit(session) && selected?.supportsEditing === false;
     const accountLocked = !state.user || state.authBusy;
     $("account-logout").disabled = accountLocked;
     $("password-open").disabled = accountLocked;
     $("password-fields").disabled = accountLocked;
     for (const button of document.querySelectorAll('[data-close="password-dialog"]')) button.disabled = state.authBusy;
-    for (const id of ["prompt", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
+    for (const id of ["prompt", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
       $(id).disabled = disabled;
     }
+    $("quality").disabled = disabled || session.draft.model === MAI_MODEL;
+    $("size").disabled = disabled || (session.draft.model === MAI_MODEL && effectiveEdit(session));
     $("new-chat").disabled = Boolean(state.busy || accountLocked);
     $("refresh-history").disabled = Boolean(state.historyRead || accountLocked);
     for (const button of document.querySelectorAll(".chat-select")) button.disabled = Boolean(state.busy);
@@ -367,8 +460,10 @@
     for (const button of document.querySelectorAll(".suggestion")) button.disabled = disabled;
     $("brand-home").setAttribute("aria-disabled", String(Boolean(state.busy)));
     const hasInput = Boolean(session.draft.prompt.trim() || session.draft.attachment);
-    $("send-button").disabled = disabled || !hasInput || state.status?.configured !== true;
-    $("send-button").title = state.status?.configured !== true ? "Configure the backend in Settings before generating." : disabled ? "This chat is busy. You can switch or start another chat." : "Generate one image";
+    $("send-button").disabled = disabled || !hasInput || !configured || editingUnsupported;
+    $("send-button").title = !configured ? `Check ${modelLabel(session.draft.model)} setup in Settings before generating.`
+      : editingUnsupported ? "This model does not support editing. Remove the attachment and turn off Use latest image."
+      : disabled ? "This chat is busy. You can switch or start another chat." : `Generate one image with ${modelLabel(session.draft.model)}`;
     $("send-label").textContent = request?.phase === "unconfirmed" ? "Awaiting result" : chatBusy(session) ? "Creating…" : "Generate";
     $("check-result").disabled = Boolean(session.read);
     $("resume-draft").hidden = request?.phase !== "unconfirmed";
@@ -392,20 +487,29 @@
 
   function renderStatus() {
     if (state.stopped) return;
-    const configured = state.status?.configured === true;
-    const unknown = !state.status;
+    const id = activeSession().draft.model;
+    const selected = modelStatus(id);
+    const label = text(selected?.label, modelLabel(id));
+    const configured = selected?.configured === true;
+    const unknown = !selected;
+    const setupPath = id === MAI_MODEL ? "Foundry:Mai" : "Foundry";
     $("status-chip-text").textContent = state.statusLoading ? "Checking setup" : configured ? "Configured · not tested" : unknown ? "Setup unavailable" : "Setup needed";
+    $("status-chip").title = `${label}: ${$("status-chip-text").textContent}`;
+    $("model-readiness").textContent = $("status-chip-text").textContent;
+    $("model-readiness").classList.toggle("not-ready", !configured);
     $("status-chip").classList.toggle("not-ready", !configured && !state.statusLoading);
     $("config-warning").hidden = configured || (state.statusLoading && !state.statusError);
-    $("config-title").textContent = unknown ? "Backend readiness is unavailable" : "Image generation isn’t configured yet";
+    $("config-title").textContent = `${label}: ${unknown ? "readiness is unavailable" : "setup needed"}`;
     $("config-message").textContent = unknown
-      ? text(state.statusError, "Check the backend setup, then check readiness again in Settings.")
-      : text(state.status.message, "Configure Microsoft Foundry on the backend, then check readiness again in Settings. Your draft can stay here.");
+      ? `${text(state.statusError, "The backend has not reported readiness for this model.")} Check ${setupPath} on the server, then check readiness again in Settings.`
+      : `${text(selected.message, "Configure this model on the backend, then check readiness again in Settings. Your draft can stay here.")} Setup: ${setupPath}. Other models have independent readiness.`;
+    $("settings-model").textContent = `${label} · ${id}`;
     $("settings-readiness").textContent = state.statusLoading ? "Checking backend configuration…" : configured ? "Configured — connectivity has not been tested" : unknown ? "Unable to check readiness" : "Not configured — generation is unavailable";
     $("settings-readiness").classList.toggle("not-ready", !configured);
-    $("settings-deployment").textContent = text(state.status?.deployment, "Not reported");
-    $("settings-auth").textContent = text(state.status?.authMode, "Not reported");
-    $("settings-message").textContent = state.statusError || text(state.status?.message, "The backend did not provide an additional status message.");
+    $("settings-deployment").textContent = text(selected?.deployment, "Not reported");
+    $("settings-auth").textContent = text(selected?.authMode, "Not reported");
+    $("settings-message").textContent = state.statusError || text(selected?.message, "The backend did not provide an additional status message for this model.");
+    $("settings-setup-help").textContent = `Configure ${label} under ${setupPath} on the server. The selected model’s readiness is configuration only, not a connectivity test. Requests never automatically switch to another model or deployment.`;
     updateControls();
   }
 
@@ -416,8 +520,7 @@
     try {
       const status = await api("/api/status");
       if (state.stopped) return;
-      if (!status || typeof status.configured !== "boolean") throw new Error("The backend returned an invalid readiness response.");
-      state.status = status;
+      state.status = publicStatus(status);
       state.statusError = "";
     } catch (error) {
       if (state.stopped) return;
@@ -645,7 +748,9 @@
     open.append(img, badge);
     open.addEventListener("click", () => openPreview(url, img.alt));
     const caption = element("figcaption", "image-caption");
-    const meta = [text(message.size).replaceAll("x", " × "), text(message.quality) ? `${message.quality} quality` : ""].filter(Boolean).join(" · ");
+    const meta = [message.role === "assistant" ? modelLabel(message.model) : "",
+      message.size === "auto" ? "Model determined" : text(message.size).replaceAll("x", " × "),
+      message.quality === "default" ? "Model default" : text(message.quality) ? `${message.quality} quality` : ""].filter(Boolean).join(" · ");
     const download = element("a", "download-link", "Download");
     download.href = downloadUrl(url);
     download.download = "";
@@ -682,7 +787,10 @@
         const time = element("time", "message-time", formatDate(message.createdAt, true));
         const date = new Date(message.createdAt);
         if (message.createdAt && !Number.isNaN(date.getTime())) time.dateTime = date.toISOString();
-        header.append(avatar, element("span", "message-author", message.role === "user" ? "You" : "Frame"), time);
+        header.append(avatar, element("span", "message-author", message.role === "user" ? "You" : "Frame"));
+        const model = element("span", "message-model", modelLabel(message.model));
+        if (text(message.deployment)) model.title = `Deployment: ${message.deployment}`;
+        header.append(model, time);
         const content = element("div", "message-content");
         // Render the actual saved user text, including any backend fallback, never an optimistic guess.
         if (text(message.text)) content.append(element("p", "message-text", message.text));
@@ -719,6 +827,13 @@
     const changed = JSON.stringify(previous) !== JSON.stringify(chat);
     const wasPending = session.serverPending;
     session.chat = chat;
+    // Initialize only on the first accepted chat read. Subsequent polls, even
+    // another tab's newer model choice, must never overwrite an owned draft.
+    if (!previous && !session.request && session.draft.version === 0 && !hasDraft(session)) {
+      const latestModel = chat.messages.at(-1)?.model;
+      session.draft.model = MODEL_DEFAULTS.has(latestModel) ? latestModel : GPT_MODEL;
+    }
+    normalizeDraft(session);
     session.missing = false;
     session.serverPending = pendingChat(chat);
     session.needsRead = false;
@@ -730,6 +845,7 @@
     observeSaved(session, wasPending);
     upsertHistory(chat);
     if (isActive(session)) {
+      if (!previous) renderStatus();
       if (changed) renderChat();
       renderFeedback();
       updateControls();
@@ -763,12 +879,13 @@
 
   function captureDraft(session = activeSession()) {
     if (!isActive(session)) return;
-    const values = { prompt: $("prompt").value, quality: $("quality").value,
+    const values = { prompt: $("prompt").value, model: $("model").value, quality: $("quality").value,
       size: $("size").value, useLatest: $("use-latest").checked };
     if (Object.entries(values).some(([key, value]) => session.draft[key] !== value)) {
       Object.assign(session.draft, values);
       session.draft.version += 1;
     }
+    normalizeDraft(session);
   }
 
   function renderDraft() {
@@ -776,8 +893,6 @@
     const draft = activeSession().draft;
     $("prompt").value = draft.prompt;
     $("prompt").style.height = "";
-    $("quality").value = draft.quality;
-    $("size").value = draft.size;
     $("use-latest").checked = draft.useLatest;
     $("image-input").value = "";
     $("attachment-preview").hidden = !draft.attachment;
@@ -787,7 +902,7 @@
       $("attachment-size").textContent = `${(draft.attachment.size / (1024 * 1024)).toFixed(2)} MB · ${draft.attachment.type === "image/png" ? "PNG" : "JPEG"}`;
     } else $("attachment-image").removeAttribute("src");
     renderFeedback();
-    updateControls();
+    renderStatus();
   }
 
   function activateSession(session) {
@@ -818,7 +933,7 @@
 
   function hasDraft(session = activeSession()) {
     const draft = session.draft;
-    return Boolean(draft.prompt.trim() || draft.attachment || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
+    return Boolean(draft.prompt.trim() || draft.attachment || draft.model !== GPT_MODEL || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
   }
 
   function confirmAction({ title, description, label, cancelLabel = "Cancel" }) {
@@ -1079,11 +1194,13 @@
     const session = activeSession();
     captureDraft(session);
     draftError("");
-    if (state.status?.configured !== true) { draftError("Image generation is unavailable until backend readiness is confirmed in Settings."); return; }
+    const selected = modelStatus(session.draft.model);
+    if (selected?.configured !== true) { draftError(`${modelLabel(session.draft.model)} is unavailable until its backend readiness is confirmed in Settings. No other model will be used.`); return; }
+    if (effectiveEdit(session) && !selected.supportsEditing) { draftError("This model does not support editing. Remove the attachment and turn off Use latest image."); return; }
     const snapshot = { ...session.draft };
     if (!snapshot.prompt.trim() && !snapshot.attachment) { draftError("Describe an image or attach one PNG or JPEG to begin."); $("prompt").focus(); return; }
     const context = { phase: "sending", startedAt: Date.now(), beforeIds: new Set(session.chat?.messages.map((message) => message.id) || []),
-      draft: session.draft, draftVersion: snapshot.version, prompt: snapshot.prompt.trim() || DEFAULT_IMAGE_PROMPT,
+      draft: session.draft, draftVersion: snapshot.version, model: snapshot.model, prompt: snapshot.prompt.trim() || DEFAULT_IMAGE_PROMPT,
       assistantId: null, checked: false, draftCleared: false };
     // Claim the draft synchronously, before even the first lazy-create await.
     // This prevents Enter/double-click from creating or submitting a second turn.
@@ -1116,8 +1233,9 @@
       }
       const form = new FormData();
       form.append("prompt", context.prompt);
+      form.append("model", snapshot.model);
       if (snapshot.attachment) form.append("image", snapshot.attachment, snapshot.attachment.name);
-      form.append("quality", snapshot.quality);
+      if (snapshot.model !== MAI_MODEL) form.append("quality", snapshot.quality);
       form.append("size", snapshot.size);
       form.append("usePreviousImage", String(snapshot.useLatest));
       submitted = true;
@@ -1320,8 +1438,8 @@
     });
   }
   $("prompt").addEventListener("input", () => { captureDraft(); draftError(""); updateControls(); renderHistory(); });
-  for (const id of ["quality", "size", "use-latest"]) {
-    $(id).addEventListener("change", () => { captureDraft(); updateControls(); renderHistory(); });
+  for (const id of ["model", "quality", "size", "use-latest"]) {
+    $(id).addEventListener("change", () => { captureDraft(); renderStatus(); renderHistory(); });
   }
   $("prompt").addEventListener("compositionstart", () => { state.composing = true; });
   $("prompt").addEventListener("compositionend", () => { state.composing = false; });
