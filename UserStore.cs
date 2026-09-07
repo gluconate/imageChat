@@ -39,7 +39,7 @@ public sealed class UserStore
     private const int MaxFileBytes = 8 * 1024 * 1024;
     private const int FailureLimit = 5;
     private static readonly TimeSpan LockoutWindow = TimeSpan.FromMinutes(15);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false,
         NumberHandling = JsonNumberHandling.Strict,
@@ -56,6 +56,16 @@ public sealed class UserStore
     private readonly string filePath;
     private readonly string lockPath;
     private readonly StoreGate gate;
+    private readonly IAccountRepository? accountRepository;
+    private bool cloudDirty;
+
+    internal UserStore(IAccountRepository repository)
+    {
+        directory = filePath = lockPath = "";
+        gate = new StoreGate();
+        accountRepository = repository;
+        WithFile(users => users.Users.Count);
+    }
 
     public UserStore(string dataDirectory)
     {
@@ -236,6 +246,15 @@ public sealed class UserStore
         {
             try
             {
+                if (accountRepository != null)
+                    return accountRepository.Execute(users =>
+                    {
+                        cloudDirty = false;
+                        var document = new UsersFile(1, users);
+                        ValidateFile(document);
+                        var result = action(document);
+                        return new AccountUpdate<T>(result, cloudDirty ? document.Users : null);
+                    });
                 // Kept on disk (empty) so two processes cannot lock different unlinked files.
                 // A competing process fails closed rather than overwriting another update.
                 using var fileLock = LocalFileIO.RetrySharing(() => new FileStream(lockPath, PrivateFileOptions(FileMode.OpenOrCreate)));
@@ -272,6 +291,11 @@ public sealed class UserStore
     private void Save(UsersFile users)
     {
         ValidateFile(users);
+        if (accountRepository != null)
+        {
+            cloudDirty = true;
+            return;
+        }
         var bytes = JsonSerializer.SerializeToUtf8Bytes(users, JsonOptions);
         if (bytes.Length > MaxFileBytes) throw Unavailable();
         var temporary = Path.Combine(directory, $".users-{Guid.NewGuid():N}.tmp");

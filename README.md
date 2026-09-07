@@ -2,7 +2,11 @@
 
 A local image-creation studio for a **GPT-image-2 deployment in Microsoft Foundry**. A single ASP.NET Core application serves the website and a server-side API. No Node.js, frontend build, CDN, separate database server, or second language model is required.
 
-## Included
+## Azure serverless deployment
+
+The application also supports Azure Container Apps Consumption with Blob, Table and Queue Storage. See [deployment and administrator setup](infra/README.md) for the deployed environment, scale-to-zero behavior, costs and operations. The local SQLite instructions below still apply to local mode; the serverless deployment does not use a mounted SQLite database.
+
+## Included features
 
 - Text-only generation, image-only variation, and text + image editing.
 - Follow-up requests using earlier successful prompts and the latest generated image.

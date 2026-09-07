@@ -2,6 +2,11 @@ param([ValidateSet('run', 'test', 'build', 'publish', 'create-admin')][string]$A
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 Set-Location $repo
+$localSdk = Join-Path $repo '.cache/sdk'
+if (Test-Path (Join-Path $localSdk 'dotnet.exe')) {
+    $env:DOTNET_ROOT = $localSdk
+    $env:PATH = "$localSdk;$env:PATH"
+}
 # Process-local only: no user/machine environment or package cache changes.
 $env:DOTNET_CLI_HOME = Join-Path $repo '.cache/dotnet'
 $env:NUGET_PACKAGES = Join-Path $repo '.cache/nuget'

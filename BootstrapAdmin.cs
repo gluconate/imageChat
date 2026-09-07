@@ -2,14 +2,16 @@ namespace ImageChat;
 
 public static class BootstrapAdmin
 {
-    public static void Run(string dataDirectory)
+    public static void Run(string dataDirectory) => Run(() => new UserStore(dataDirectory));
+
+    public static void Run(Func<UserStore> createStore)
     {
         try
         {
             // Never accept piped passwords, which commonly end up in shell history or deployment logs.
             if (Console.IsInputRedirected || Console.IsOutputRedirected)
                 throw new AppException(400, "Offline administrator setup requires an interactive terminal (use docker -it for containers).");
-            var store = new UserStore(dataDirectory);
+            var store = createStore();
             if (store.HasUsers) throw new AppException(409, "Accounts already exist. Offline bootstrap is not allowed.");
             Console.Write("Administrator username: ");
             var username = Console.ReadLine();

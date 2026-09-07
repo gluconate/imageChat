@@ -33,12 +33,22 @@ public static class AccountSecurity
     internal const string StampClaim = "security_stamp";
     private const string Scheme = CookieAuthenticationDefaults.AuthenticationScheme;
 
-    public static void AddAccountSecurity(this IServiceCollection services, IConfiguration config)
+    public static void AddAccountSecurity(this IServiceCollection services, IConfiguration config, AzureStorage? cloud = null)
     {
-        services.AddSingleton(provider => new UserStore(DataDirectory(provider.GetRequiredService<AppPaths>(), provider)));
-        services.AddDataProtection().SetApplicationName("ImageChat");
+        services.AddSingleton(provider => cloud == null
+            ? new UserStore(DataDirectory(provider.GetRequiredService<AppPaths>(), provider))
+            : new UserStore(new AzureAccountRepository(cloud)));
+        var protection = services.AddDataProtection().SetApplicationName("ImageChat");
+        if (cloud != null)
+        {
+            protection.PersistKeysToAzureBlobStorage(cloud.Keys.GetBlobClient("keyring.xml"));
+            if (config["Storage:KeyEncryptionKeyUri"] is { Length: > 0 } keyUri)
+                protection.ProtectKeysWithAzureKeyVault(new Uri(keyUri), new Azure.Identity.DefaultAzureCredential());
+            else if (string.IsNullOrEmpty(config["Storage:ConnectionString"]))
+                throw new InvalidOperationException("Configure Storage:KeyEncryptionKeyUri to protect cloud session keys.");
+        }
         // Resolve paths only when options are built, after test/host DI overrides have been applied.
-        services.AddOptions<KeyManagementOptions>().PostConfigure<AppPaths, IServiceProvider>((options, paths, provider) =>
+        if (cloud == null) services.AddOptions<KeyManagementOptions>().PostConfigure<AppPaths, IServiceProvider>((options, paths, provider) =>
         {
             var keys = new DirectoryInfo(Path.Combine(DataDirectory(paths, provider), "keys"));
             options.XmlRepository = new FileSystemXmlRepository(keys, NullLoggerFactory.Instance);

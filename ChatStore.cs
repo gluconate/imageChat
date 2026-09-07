@@ -4,7 +4,7 @@ namespace ImageChat;
 
 // One SQLite database contains metadata AND image bytes so a backup stays consistent.
 // Storage is intentionally single-instance. Replace this service for horizontal cloud scaling.
-public sealed partial class ChatStore
+public sealed partial class ChatStore : IChatStore
 {
     private readonly string connectionString;
     public ChatStore(string directory)

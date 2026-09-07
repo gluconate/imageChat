@@ -1042,6 +1042,7 @@
       if (context.phase === "sending") return;
       context.checked = true;
       const result = outcome(session.chat, context);
+      if (context.phase === "accepted" && context.assistantId && result === "pending") return;
       if (context.assistantId && ["completed", "failed"].includes(result)) {
         finishConfirmed(session, context, result);
       } else {
@@ -1127,6 +1128,11 @@
       const result = outcome(chat, context, true);
       applyChat(session, chat);
       if (["completed", "failed"].includes(result)) finishConfirmed(session, context, result);
+      else if (result === "pending") {
+        context.phase = "accepted";
+        session.serverPending = true;
+        session.needsRead = true;
+      }
       else holdUnconfirmed(session, context, "The response did not contain a terminal result. Checking saved messages is safe; resending may create a duplicate.");
     } catch (error) {
       if (state.stopped || session.request !== context) return;
