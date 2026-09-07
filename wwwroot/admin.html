@@ -24,7 +24,7 @@
       <nav class="section-nav" aria-label="Administration sections"><a href="#activity">Image activity</a><a href="#users">Accounts</a></nav>
       <section id="activity" class="admin-section" aria-labelledby="activity-title">
         <div class="section-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h2 id="activity-title">Image activity</h2></div><button id="telemetry-refresh" class="secondary-button" type="button">Refresh activity</button></div>
-        <p class="section-description">Totals cover every matching historical record, not just this page. Deleting a chat does not reduce these totals. Older records are shown separately as legacy / unknown: their client IP, request type, model and deployment may be unavailable. Model labels reflect each recorded request, not today’s configuration.</p>
+        <p id="activity-model-help" class="section-description">Totals cover every matching historical record, not just this page. Deleting a chat does not reduce these totals. Older records are shown separately as legacy / unknown: their client IP, request type, model and deployment may be unavailable. Model labels reflect each recorded request, not today’s configuration. Studio model options are GPT-image-2, MAI-Image-2.5-Flash (Preview), and FLUX.2-pro.</p>
         <form id="filter-form" class="card filter-card">
           <fieldset id="filter-fields">
             <legend>Filter historical requests</legend>
@@ -47,7 +47,7 @@
             <div class="metric accent"><dt>All images</dt><dd id="total-totalImages">—</dd><small>Generated + edited + legacy</small></div>
           </dl>
           <dl class="request-totals"><div><dt>Requests</dt><dd id="total-requests">—</dd></div><div><dt>Failed</dt><dd id="total-failed">—</dd></div><div><dt>Rejected</dt><dd id="total-rejected">—</dd></div><div><dt>Pending</dt><dd id="total-pending">—</dd></div></dl>
-          <div class="table-scroll" role="region" aria-label="Historical image requests; scroll horizontally for all columns" tabindex="0">
+          <div class="table-scroll" role="region" aria-label="Historical image requests with recorded model and deployment; scroll horizontally for all columns" aria-describedby="activity-model-help" tabindex="0">
             <table class="activity-table"><caption id="activity-caption">Historical requests · local times</caption><thead><tr><th scope="col">Requested</th><th scope="col">Completed</th><th scope="col">Account</th><th scope="col">Client IP</th><th scope="col">Operation</th><th scope="col">Model</th><th scope="col">Deployment</th><th scope="col">Status</th><th scope="col">Images</th><th scope="col">HTTP</th><th scope="col">Request ID</th></tr></thead><tbody id="telemetry-rows"></tbody></table>
           </div>
           <p id="telemetry-empty" class="empty-state" hidden>No requests match these filters.</p>

@@ -2,6 +2,15 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "ImageChat: Reset administrator password",
+      "type": "shell",
+      "command": "sh",
+      "args": ["scripts/dev.sh", "reset-admin-password"],
+      "windows": { "command": "powershell", "args": ["-NoProfile", "-File", "scripts/dev.ps1", "reset-admin-password"] },
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
       "label": "ImageChat: Create administrator",
       "type": "shell",
       "command": "sh",

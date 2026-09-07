@@ -32,6 +32,7 @@
   function modelLabel(id) {
     if (id === "gpt-image-2") return "GPT-image-2";
     if (id === "mai-image-2.5-flash") return "MAI-Image-2.5-Flash (Preview)";
+    if (id === "flux.2-pro") return "FLUX.2-pro";
     return typeof id === "string" && id.trim() && !/^gpt$/i.test(id.trim()) ? id : "Legacy / unknown model";
   }
 

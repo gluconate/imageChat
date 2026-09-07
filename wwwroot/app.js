@@ -7,16 +7,24 @@
   const POLL_MS = 3000;
   const GPT_MODEL = "gpt-image-2";
   const MAI_MODEL = "mai-image-2.5-flash";
-  // Local capabilities keep both choices visible when readiness is unavailable.
+  const FLUX_MODEL = "flux.2-pro";
+  // Local capabilities keep all choices visible when readiness is unavailable.
   // Readiness is always taken from the selected model, never another deployment.
   const MODEL_DEFAULTS = new Map([
-    [GPT_MODEL, { id: GPT_MODEL, label: "GPT-image-2", supportsEditing: true,
+    [GPT_MODEL, { id: GPT_MODEL, label: "GPT-image-2", setupPath: "Foundry", supportsEditing: true,
+      help: "GPT-image-2: choose quality and a fixed output size for generation or editing.",
       sizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "3840x2160"],
       editSizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "3840x2160"],
       qualities: ["low", "medium", "high"] }],
-    [MAI_MODEL, { id: MAI_MODEL, label: "MAI-Image-2.5-Flash (Preview)", supportsEditing: true,
+    [MAI_MODEL, { id: MAI_MODEL, label: "MAI-Image-2.5-Flash (Preview)", setupPath: "Foundry:Mai", supportsEditing: true,
+      help: "MAI preview: up to 1MP; model-default quality, no quality control. Generation uses fixed size presets; edit size is model determined.",
       sizes: ["1024x1024", "768x1024", "1024x768", "768x1365", "1365x768"],
-      editSizes: ["auto"], qualities: ["default"] }]
+      editSizes: ["auto"], qualities: ["default"] }],
+    [FLUX_MODEL, { id: FLUX_MODEL, label: "FLUX.2-pro", setupPath: "Foundry:Flux", supportsEditing: true,
+      help: "FLUX.2-pro uses the Microsoft Foundry BFL provider: fixed size presets for generation and editing; model-default quality, no quality control. One reference image in this app. Up to 4MP; app presets max 1920 × 1920 (3,686,400 pixels, under 4MP).",
+      sizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "1920x1920"],
+      editSizes: ["1024x1024", "1536x1024", "1024x1536", "1536x1536", "1920x1920"],
+      qualities: ["default"] }]
   ]);
   const $ = (id) => document.getElementById(id);
   const mobile = matchMedia("(max-width: 800px)");
@@ -78,6 +86,14 @@
     return state.status?.models.find((model) => model.id === id) || null;
   }
 
+  function modelCapabilities(id) {
+    return modelStatus(id) || MODEL_DEFAULTS.get(id);
+  }
+
+  function hasQualityControl(id) {
+    return modelCapabilities(id)?.qualities.some((quality) => quality !== "default") === true;
+  }
+
   function effectiveEdit(session) {
     return Boolean(session.draft.attachment || (session.draft.useLatest && session.chat?.messages.some(
       (message) => message.role === "assistant" && message.status === "completed" && message.imageUrl)));
@@ -85,7 +101,7 @@
 
   function normalizeDraft(session) {
     const draft = session.draft;
-    const model = modelStatus(draft.model) || MODEL_DEFAULTS.get(draft.model);
+    const model = modelCapabilities(draft.model);
     if (!model) return;
     const sizes = effectiveEdit(session) ? model.editSizes : model.sizes;
     if (!sizes.includes(draft.size)) draft.size = sizes.includes("1024x1024") ? "1024x1024" : sizes[0];
@@ -111,21 +127,23 @@
   function renderModelControls(session) {
     normalizeDraft(session);
     const draft = session.draft;
-    const model = modelStatus(draft.model) || MODEL_DEFAULTS.get(draft.model);
+    const model = modelCapabilities(draft.model);
     selectOptions("model", [...MODEL_DEFAULTS.values()].map((item) => [item.id, text(modelStatus(item.id)?.label, item.label)]), draft.model);
     if (!model) return;
     const sizes = effectiveEdit(session) ? model.editSizes : model.sizes;
     selectOptions("size", sizes.map((size) => [size, size === "auto" ? "Model determined" : size.replaceAll("x", " × ")]), draft.size);
     selectOptions("quality", model.qualities.map((quality) => [quality, quality === "default" ? "Model default" : quality[0].toUpperCase() + quality.slice(1)]), draft.quality);
-    $("model-help").hidden = draft.model !== MAI_MODEL;
+    const help = MODEL_DEFAULTS.get(draft.model).help;
+    $("model-help-text").textContent = help;
+    $("settings-model-controls").textContent = help;
   }
 
   function publicStatus(status) {
     if (!status || typeof status.configured !== "boolean" || (status.models !== undefined && !Array.isArray(status.models))) {
       throw new Error("The backend returned an invalid readiness response.");
     }
-    // An older backend reports only GPT readiness. MAI remains selectable but
-    // unavailable; never inherit the legacy top-level configuration for it.
+    // An older backend reports only GPT readiness. Other models remain selectable but
+    // unavailable; never inherit the legacy top-level configuration for them.
     const models = status.models === undefined ? [{ ...MODEL_DEFAULTS.get(GPT_MODEL), ...status, id: GPT_MODEL }] : status.models;
     const ids = new Set();
     const safeModels = models.map((model) => {
@@ -449,8 +467,8 @@
     for (const id of ["prompt", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
       $(id).disabled = disabled;
     }
-    $("quality").disabled = disabled || session.draft.model === MAI_MODEL;
-    $("size").disabled = disabled || (session.draft.model === MAI_MODEL && effectiveEdit(session));
+    $("quality").disabled = disabled || !hasQualityControl(session.draft.model);
+    $("size").disabled = disabled || session.draft.size === "auto";
     $("new-chat").disabled = Boolean(state.busy || accountLocked);
     $("refresh-history").disabled = Boolean(state.historyRead || accountLocked);
     for (const button of document.querySelectorAll(".chat-select")) button.disabled = Boolean(state.busy);
@@ -492,7 +510,7 @@
     const label = text(selected?.label, modelLabel(id));
     const configured = selected?.configured === true;
     const unknown = !selected;
-    const setupPath = id === MAI_MODEL ? "Foundry:Mai" : "Foundry";
+    const setupPath = MODEL_DEFAULTS.get(id).setupPath;
     $("status-chip-text").textContent = state.statusLoading ? "Checking setup" : configured ? "Configured · not tested" : unknown ? "Setup unavailable" : "Setup needed";
     $("status-chip").title = `${label}: ${$("status-chip-text").textContent}`;
     $("model-readiness").textContent = $("status-chip-text").textContent;
@@ -1235,7 +1253,7 @@
       form.append("prompt", context.prompt);
       form.append("model", snapshot.model);
       if (snapshot.attachment) form.append("image", snapshot.attachment, snapshot.attachment.name);
-      if (snapshot.model !== MAI_MODEL) form.append("quality", snapshot.quality);
+      if (hasQualityControl(snapshot.model)) form.append("quality", snapshot.quality);
       form.append("size", snapshot.size);
       form.append("usePreviousImage", String(snapshot.useLatest));
       submitted = true;
@@ -1378,6 +1396,11 @@
   $("dismiss-error").addEventListener("click", () => showError(""));
   $("settings-open").addEventListener("click", () => $("settings-dialog").showModal());
   $("config-settings").addEventListener("click", () => $("settings-dialog").showModal());
+  $("model-help-link").addEventListener("click", (event) => {
+    event.preventDefault();
+    $("settings-dialog").showModal();
+    $("settings-model-controls").focus();
+  });
   $("refresh-status").addEventListener("click", () => { void loadStatus(); });
   $("auth-retry").addEventListener("click", () => { void initialize(); });
   $("account-logout").addEventListener("click", () => { void logout(); });

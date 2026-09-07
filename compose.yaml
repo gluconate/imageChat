@@ -14,6 +14,11 @@ services:
       Foundry__Mai__Deployment: ${MAI_DEPLOYMENT:-mai-image-2.5-flash}
       Foundry__Mai__AuthMode: ${MAI_AUTH_MODE:-ApiKey}
       Foundry__Mai__ApiKey: ${MAI_API_KEY:-}
+      Foundry__Flux__Endpoint: ${FLUX_ENDPOINT:-}
+      Foundry__Flux__Deployment: ${FLUX_DEPLOYMENT:-FLUX.2-pro}
+      Foundry__Flux__ApiVersion: ${FLUX_API_VERSION:-preview}
+      Foundry__Flux__AuthMode: ${FLUX_AUTH_MODE:-ApiKey}
+      Foundry__Flux__ApiKey: ${FLUX_API_KEY:-}
     volumes:
       - imagechat-data:/app/data
     restart: unless-stopped

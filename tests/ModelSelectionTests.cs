@@ -45,10 +45,10 @@ public class ModelSelectionTests
         }
         mai.Validate("auto", "default", editing: true);
         var statuses = catalog.Statuses();
-        Assert.Equal(new[] { ModelCatalog.Gpt, ModelCatalog.Mai }, statuses.Select(status => status.Id).ToArray());
+        Assert.Equal(new[] { ModelCatalog.Gpt, ModelCatalog.Mai, ModelCatalog.Flux }, statuses.Select(status => status.Id).ToArray());
         Assert.All(statuses, status =>
         {
-            Assert.True(status.Configured);
+            Assert.Equal(status.Id != ModelCatalog.Flux, status.Configured); // This fixture configures only GPT and MAI.
             Assert.True(status.SupportsEditing);
             Assert.False(string.IsNullOrWhiteSpace(status.Label));
             var selected = catalog.Resolve(status.Id);
@@ -118,7 +118,9 @@ public class ModelSelectionTests
         Assert.Equal("ApiKey", root.GetProperty("authMode").GetString());
         AssertSafeStatusProperties(root);
         var models = root.GetProperty("models").EnumerateArray().ToArray();
-        Assert.Equal(2, models.Length);
+        Assert.Equal(3, models.Length);
+        Assert.False(Assert.Single(models, model => model.GetProperty("id").GetString() == ModelCatalog.Flux)
+            .GetProperty("configured").GetBoolean());
         foreach (var (id, ready, deployment) in new[]
                  { (ModelCatalog.Gpt, gptReady, GptDeployment), (ModelCatalog.Mai, maiReady, MaiDeployment) })
         {

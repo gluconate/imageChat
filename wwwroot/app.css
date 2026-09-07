@@ -208,6 +208,7 @@ svg { flex-shrink: 0; }
 .model-readiness { font-size: 10px; color: #526348; }
 .model-readiness.not-ready { color: #96421f; }
 .model-help { color: #656b5a; font-size: 11px; line-height: 1.7; margin: -2px 0 12px; overflow-wrap: anywhere; }
+.model-help a { font-weight: 600; text-underline-offset: 3px; }
 .reuse-control { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #656b5a; cursor: pointer; }
 .reuse-control input { accent-color: #777e5e; width: 14px; height: 14px; margin: 0; }
 .output-count { font-size: 10px; color: #797e6c; margin-left: auto; }
