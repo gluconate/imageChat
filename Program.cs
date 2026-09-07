@@ -12,7 +12,14 @@ var createAdmin = args.Contains("--create-admin", StringComparer.Ordinal);
 var worker = args.Contains("--worker", StringComparer.Ordinal);
 var dispatch = args.Contains("--dispatch", StringComparer.Ordinal);
 var initialize = args.Contains("--initialize-storage", StringComparer.Ordinal);
-var hostArgs = args.Where(arg => arg is not ("--create-admin" or "--worker" or "--dispatch" or "--initialize-storage")).ToArray();
+var resetAdminPassword = args.Contains("--reset-admin-password", StringComparer.Ordinal);
+if (createAdmin && resetAdminPassword)
+{
+    Console.Error.WriteLine("Choose either --create-admin or --reset-admin-password, not both.");
+    Environment.ExitCode = 1;
+    return;
+}
+var hostArgs = args.Where(arg => arg is not ("--create-admin" or "--reset-admin-password" or "--worker" or "--dispatch" or "--initialize-storage")).ToArray();
 var builder = WebApplication.CreateBuilder(hostArgs);
 // Repo-local secrets for development; environment variables always win in containers/cloud.
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: false)
@@ -42,10 +49,10 @@ if (worker || dispatch)
 builder.Services.AddSingleton(services => new AppPaths(Path.GetFullPath(
     services.GetRequiredService<IConfiguration>()["Storage:Directory"] ?? "data",
     services.GetRequiredService<IWebHostEnvironment>().ContentRootPath)));
-if (createAdmin)
+if (createAdmin || resetAdminPassword)
 {
-    if (cloud != null) BootstrapAdmin.Run(() => new UserStore(new AzureAccountRepository(cloud)));
-    else BootstrapAdmin.Run(Path.GetFullPath(builder.Configuration["Storage:Directory"] ?? "data", builder.Environment.ContentRootPath));
+    if (cloud != null) BootstrapAdmin.Run(() => new UserStore(new AzureAccountRepository(cloud)), resetAdminPassword);
+    else BootstrapAdmin.Run(Path.GetFullPath(builder.Configuration["Storage:Directory"] ?? "data", builder.Environment.ContentRootPath), resetAdminPassword);
     return;
 }
 // Do not allow the platform convenience switch to enable trust-all forwarded headers.
@@ -270,7 +277,7 @@ app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, I
             store.SetRequestModel(telemetryId, selected.Id, selected.Connection.Deployment);
         if (selected.ConfigurationError is { } configurationError) throw new AppException(503, configurationError);
         var size = form["size"].ToString();
-        var quality = selected.Id == ModelCatalog.Mai && !form.ContainsKey("quality") ? "default" : form["quality"].ToString();
+        var quality = selected.Qualities.Contains("default") && !form.ContainsKey("quality") ? "default" : form["quality"].ToString();
         if (form.Files.Count > 1 || (form.Files.Count == 1 && form.Files[0].Name != "image"))
             throw new AppException(400, "Attach one image per message.");
         ImageData? attachment = null;

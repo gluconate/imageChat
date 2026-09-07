@@ -7,8 +7,9 @@ namespace ImageChat;
 
 public sealed class FoundryOptions
 {
-    // Existing root settings remain the GPT deployment; MAI is configured independently.
+    // Existing root settings remain the GPT deployment; other providers are independent.
     public MaiOptions Mai { get; set; } = new();
+    public FluxOptions Flux { get; set; } = new();
     public string Endpoint { get; set; } = "";
     public string Deployment { get; set; } = "gpt-image-2";
     public string ApiVersion { get; set; } = "2025-04-01-preview";
@@ -18,14 +19,15 @@ public sealed class FoundryOptions
     public string TokenScope { get; set; } = "https://cognitiveservices.azure.com/.default";
     public int TimeoutSeconds { get; set; } = 300;
 
-    public string? ConfigurationError(bool allowMai = false)
+    public string? ConfigurationError(bool allowMai = false, bool allowFlux = false)
     {
         if (!Uri.TryCreate(Endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
             !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath.Trim('/') != "" ||
             !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             return "Set Foundry:Endpoint to the HTTPS resource root (not a project URL or complete API URL) in appsettings.Local.json, then restart.";
         if (string.IsNullOrWhiteSpace(Deployment)) return "Set Foundry:Deployment to your deployed model's deployment name.";
-        if (ApiStyle is not ("deployments" or "v1") && !(allowMai && ApiStyle == "mai")) return "Foundry:ApiStyle must be deployments or v1.";
+        if (ApiStyle is not ("deployments" or "v1") && !(allowMai && ApiStyle == "mai") && !(allowFlux && ApiStyle == "bfl"))
+            return "Foundry:ApiStyle must be deployments or v1.";
         if (string.IsNullOrWhiteSpace(ApiVersion)) return "Set Foundry:ApiVersion to the version from your Foundry sample.";
         if (AuthMode is not ("ApiKey" or "DefaultAzureCredential")) return "Foundry:AuthMode must be ApiKey or DefaultAzureCredential.";
         if (AuthMode == "ApiKey" && string.IsNullOrWhiteSpace(ApiKey)) return "Set Foundry:ApiKey locally, or use DefaultAzureCredential, then restart.";
@@ -34,6 +36,8 @@ public sealed class FoundryOptions
 
     public Uri RequestUri(bool editing)
     {
+        // FLUX.2-pro uses the same BFL operation for generation and reference-image edits.
+        if (ApiStyle == "bfl") return new Uri($"{Endpoint.TrimEnd('/')}/providers/blackforestlabs/v1/flux-2-pro?api-version={Uri.EscapeDataString(ApiVersion)}");
         if (ApiStyle == "mai") return new Uri($"{Endpoint.TrimEnd('/')}/mai/v1/images/{(editing ? "edits" : "generations")}");
         var path = ApiStyle == "v1" ? "openai/v1/images" : $"openai/deployments/{Uri.EscapeDataString(Deployment)}/images";
         return new Uri($"{Endpoint.TrimEnd('/')}/{path}/{(editing ? "edits" : "generations")}?api-version={Uri.EscapeDataString(ApiVersion)}");
@@ -57,7 +61,13 @@ public sealed class FoundryClient(HttpClient client, FoundryOptions options, Tok
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(connection.TimeoutSeconds, 30, 600)));
         using var request = new HttpRequestMessage(HttpMethod.Post, connection.RequestUri(input.Image is not null));
-        if (connection.AuthMode == "ApiKey") request.Headers.Add("api-key", connection.ApiKey);
+        if (connection.AuthMode == "ApiKey")
+        {
+            // Azure's BFL provider API documents Bearer API-key authentication.
+            if (selected.Id == ModelCatalog.Flux)
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connection.ApiKey);
+            else request.Headers.Add("api-key", connection.ApiKey);
+        }
         else
         {
             try
@@ -70,7 +80,22 @@ public sealed class FoundryClient(HttpClient client, FoundryOptions options, Tok
                 throw new AppException(502, "Azure authentication failed. Check the configured identity and its Cognitive Services OpenAI User role.");
             }
         }
-        if (input.Image is { } image)
+        if (selected.Id == ModelCatalog.Flux)
+        {
+            var dimensions = input.Size.Split('x');
+            var payload = new Dictionary<string, object>
+            {
+                ["model"] = connection.Deployment,
+                ["prompt"] = input.Prompt,
+                ["width"] = int.Parse(dimensions[0]),
+                ["height"] = int.Parse(dimensions[1]),
+                ["output_format"] = "png",
+                ["num_images"] = 1
+            };
+            if (input.Image is { } reference) payload["input_image"] = Convert.ToBase64String(reference.Bytes);
+            request.Content = JsonContent.Create(payload);
+        }
+        else if (input.Image is { } image)
         {
             var form = new MultipartFormDataContent();
             request.Content = form;
@@ -129,7 +154,9 @@ public sealed class FoundryClient(HttpClient client, FoundryOptions options, Tok
             using var json = JsonDocument.Parse(buffer.ToArray());
             if (!json.RootElement.TryGetProperty("data", out var data) || data.GetArrayLength() != 1 ||
                 !data[0].TryGetProperty("b64_json", out var encoded) || encoded.ValueKind != JsonValueKind.String)
-                throw new AppException(502, "Foundry did not return a generated image. The output may have been filtered.");
+                throw new AppException(502, selected.Id == ModelCatalog.Flux
+                    ? "FLUX.2-pro did not return the supported base64 image response. URL-only or asynchronous responses are not followed; check your Foundry deployment's response contract."
+                    : "Foundry did not return a generated image. The output may have been filtered.");
             var bytes = Convert.FromBase64String(encoded.GetString()!);
             if (bytes.Length < 8 || !bytes.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
                 throw new AppException(502, "Foundry returned an unexpected image format; PNG was requested.");

@@ -78,7 +78,7 @@ public sealed class UserStore
             if (OperatingSystem.IsWindows()) Directory.CreateDirectory(directory);
             else Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
-        catch (Exception ex) when (IsStorageFailure(ex)) { throw Unavailable(); }
+        catch (Exception ex) when (IsStorageFailure(ex)) { throw Unavailable(ex); }
         // Opening an existing corrupt file fails closed, including during offline bootstrap.
         WithFile(users => users.Users.Count);
     }
@@ -120,6 +120,35 @@ public sealed class UserStore
             users.Users.Add(account);
             Save(users);
             return account.ToView();
+        });
+    }
+
+    // Offline operator recovery only; deliberately not exposed through an HTTP endpoint.
+    // Preserve identity/role/enabled state so resetting never reassigns chats or grants access.
+    internal UserView ResetAdminPassword(string username, string password)
+    {
+        ValidateUsername(username);
+        ValidatePassword(password);
+        var snapshot = WithFile(users => users.Users.FirstOrDefault(user =>
+            string.Equals(user.Username, username, StringComparison.OrdinalIgnoreCase) && user.Role == "admin"))
+            ?? throw new AppException(404, "Administrator account not found. No account was changed.");
+        var hash = HashPassword(password);
+        return WithFile(users =>
+        {
+            var current = users.Users.FirstOrDefault(user => user.Id == snapshot.Id);
+            if (current == null || !SameCredentials(current, snapshot))
+                throw new AppException(409, "The administrator account changed during reset. Try again.");
+            var updated = current with
+            {
+                PasswordHash = hash,
+                SecurityStamp = NewStamp(),
+                FailedLoginCount = 0,
+                FailureWindowStartedAt = null,
+                LockedUntil = null
+            };
+            Replace(users, updated);
+            Save(users);
+            return updated.ToView();
         });
     }
 
@@ -260,7 +289,7 @@ public sealed class UserStore
                 using var fileLock = LocalFileIO.RetrySharing(() => new FileStream(lockPath, PrivateFileOptions(FileMode.OpenOrCreate)));
                 return action(Load());
             }
-            catch (Exception ex) when (IsStorageFailure(ex)) { throw Unavailable(); }
+            catch (Exception ex) when (IsStorageFailure(ex)) { throw Unavailable(ex); }
         }
     }
 
@@ -309,7 +338,7 @@ public sealed class UserStore
                 file.Flush(flushToDisk: true);
             }
             // Same-directory rename with replacement: readers see an entire old or new document.
-            LocalFileIO.RetrySharing(() => { File.Move(temporary, filePath, overwrite: true); return 0; });
+            LocalFileIO.RetrySharing(() => { File.Move(temporary, filePath, overwrite: true); return 0; }, retryRenameAccessDenied: true);
             gate.HasObservedFile = true;
         }
         finally
@@ -366,7 +395,8 @@ public sealed class UserStore
 
     private static bool IsStorageFailure(Exception exception) => exception is
         IOException or UnauthorizedAccessException or JsonException or NotSupportedException;
-    private static AppException Unavailable() => new(503, StorageError);
+    private static AppException Unavailable(Exception? cause = null) => new(503, cause == null ? StorageError :
+        $"{StorageError} ({cause.GetType().Name}, code 0x{cause.HResult:X8}.)");
     internal static string ResolveDataDirectory(string dataDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);

@@ -137,22 +137,48 @@ public sealed class CloudStorageTests : IDisposable
     }
 
     [CloudFact]
+    public void CloudAdminRecoveryPreservesIdentityAndRevokesCredentials()
+    {
+        var original = Accounts().Bootstrap("administrator", Password);
+        var before = Accounts().Find(original.Id)!;
+        const string replacement = "Cloud-replacement-password-123!";
+        for (var attempt = 0; attempt < 5; attempt++)
+            Assert.Null(Accounts().Authenticate(original.Username, replacement));
+        Assert.NotNull(Accounts().Find(original.Id)!.LockedUntil);
+
+        Assert.Equal(original, Accounts().ResetAdminPassword("ADMINISTRATOR", replacement));
+
+        var after = Accounts().Find(original.Id)!;
+        Assert.NotEqual(before.SecurityStamp, after.SecurityStamp);
+        Assert.Null(after.LockedUntil);
+        Assert.Null(Accounts().Authenticate(original.Username, Password));
+        Assert.Equal(original.Id, Accounts().Authenticate(original.Username, replacement)?.Id);
+    }
+
+    [CloudFact]
     public async Task QueuedModelSelectionSurvivesWorkerAndTelemetry()
+    {
+        foreach (var model in new[] { ModelCatalog.Mai, ModelCatalog.Flux })
+            await VerifyQueuedModel(model);
+    }
+
+    private async Task VerifyQueuedModel(string model)
     {
         var store = new AzureChatStore(storage);
         var chat = store.Create("owner");
         var request = store.StartRequest("owner", "user", null);
-        store.SetRequestModel(request, ModelCatalog.Mai, "mai-deployment");
+        var deployment = model + "-deployment";
+        store.SetRequestModel(request, model, deployment);
         var pending = store.QueueTurn(chat, "Draw", "1024x1024", "default", null, request,
-            new("Draw", "1024x1024", "default", null, ModelCatalog.Mai), "mai-deployment");
-        Assert.All(pending.Messages, message => Assert.Equal(ModelCatalog.Mai, message.Model));
+            new("Draw", "1024x1024", "default", null, model), deployment);
+        Assert.All(pending.Messages, message => Assert.Equal(model, message.Model));
         var generator = new CountingGenerator();
         await new AzureChatStore(storage).ProcessOneAsync(generator, default);
-        Assert.Equal(ModelCatalog.Mai, generator.LastInput!.Model);
-        Assert.All(store.Get(chat.Id).Messages, message => Assert.Equal("mai-deployment", message.Deployment));
-        var item = Assert.Single(store.Report(new(null, null, null)).Items);
-        Assert.Equal(ModelCatalog.Mai, item.Model);
-        Assert.Equal("mai-deployment", item.Deployment);
+        Assert.Equal(model, generator.LastInput!.Model);
+        Assert.All(store.Get(chat.Id).Messages, message => Assert.Equal(deployment, message.Deployment));
+        var item = Assert.Single(store.Report(new(null, null, null)).Items, item => item.Id == request);
+        Assert.Equal(model, item.Model);
+        Assert.Equal(deployment, item.Deployment);
         Assert.Equal("completed", item.Status);
     }
 
