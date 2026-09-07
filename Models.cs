@@ -3,9 +3,9 @@ namespace ImageChat;
 public sealed record ChatSummary(string Id, string Title, string CreatedAt, string UpdatedAt, int MessageCount, string? ThumbnailUrl, bool IsGenerating = false);
 public sealed record Chat(string Id, string Title, string CreatedAt, string UpdatedAt, List<ChatMessage> Messages);
 public sealed record ChatMessage(string Id, string Role, string Text, string? ImageUrl, string CreatedAt,
-    string Size, string Quality, string Status, string? Error);
+    string Size, string Quality, string Status, string? Error, string? Model = null, string? Deployment = null);
 public sealed record ImageData(byte[] Bytes, string ContentType);
-public sealed record GenerationInput(string Prompt, string Size, string Quality, ImageData? Image);
+public sealed record GenerationInput(string Prompt, string Size, string Quality, ImageData? Image, string Model = ModelCatalog.Gpt);
 public sealed class AppException(int statusCode, string message) : Exception(message)
 {
     public int StatusCode { get; } = statusCode;

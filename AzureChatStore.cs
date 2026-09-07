@@ -45,7 +45,8 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
             var head = Head(id, ownerId);
             var messages = storage.Rows("m" + id + ":").Select(row => new ChatMessage(row.GetString("Id")!, row.GetString("Role")!,
                 row.GetString("Text")!, row.GetString("ContentType") == null ? null : ImageUrl(row.GetString("Id")!),
-                row.GetString("CreatedAt")!, row.GetString("Size")!, row.GetString("Quality")!, row.GetString("Status")!, row.GetString("Error"))).ToList();
+                row.GetString("CreatedAt")!, row.GetString("Size")!, row.GetString("Quality")!, row.GetString("Status")!, row.GetString("Error"),
+                row.GetString("Model"), row.GetString("Deployment"))).ToList();
             if (Head(id, ownerId).ETag != head.ETag) continue;
             return new(id, head.GetString("Title")!, head.GetString("CreatedAt")!, head.GetString("UpdatedAt")!, messages);
         }
@@ -80,10 +81,11 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
     }
 
     public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment,
-        string? telemetryId = null, string operation = "unknown") => StartTurn(chat, text, size, quality, attachment, telemetryId, operation, null);
+        string? telemetryId = null, string operation = "unknown", string? model = null, string? deployment = null) =>
+        StartTurn(chat, text, size, quality, attachment, telemetryId, operation, null, model, deployment);
 
     private string StartTurn(Chat chat, string text, string size, string quality, ImageData? attachment,
-        string? telemetryId, string operation, GenerationInput? input)
+        string? telemetryId, string operation, GenerationInput? input, string? model = null, string? deployment = null)
     {
         var head = Head(chat.Id);
         if (!string.IsNullOrEmpty(head.GetString("Busy")) || head.GetInt32("Count") != chat.Messages.Count || head.GetString("UpdatedAt") != chat.UpdatedAt)
@@ -103,6 +105,8 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
                 ["Size"] = size, ["Quality"] = quality, ["Status"] = role == "user" ? "completed" : "pending"
             };
             var index = new TableEntity("app", "x" + messageId) { ["ChatId"] = chat.Id, ["MessageKey"] = messageKey };
+            if (model != null) message["Model"] = model;
+            if (deployment != null) message["Deployment"] = deployment;
             if (role == "user" && attachment != null)
             {
                 message["ContentType"] = attachment.ContentType;
@@ -215,6 +219,19 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
         return id;
     }
 
+    public void SetRequestModel(string requestId, string model, string deployment)
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            var row = storage.Find("r" + requestId) ?? throw AzureStorage.Unavailable();
+            row["Model"] = model;
+            row["Deployment"] = deployment;
+            try { storage.Table.UpdateEntity(row, row.ETag, TableUpdateMode.Replace); return; }
+            catch (RequestFailedException exception) when (exception.Status == 412) { }
+        }
+        throw AzureStorage.Unavailable();
+    }
+
     public void EndRequest(string id, int httpStatus)
     {
         for (var attempt = 0; attempt < 5; attempt++)
@@ -244,7 +261,8 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
             row.GetString("Id")!, row.GetString("UserId"), row.GetString("Username"), row.GetString("Ip"),
             DateTimeOffset.FromUnixTimeMilliseconds(row.GetInt64("RequestedMs")!.Value).ToString("O"),
             row.GetInt64("CompletedMs") is { } completed ? DateTimeOffset.FromUnixTimeMilliseconds(completed).ToString("O") : null,
-            row.GetString("Operation")!, row.GetString("Status")!, row.GetInt64("ImageCount") ?? 0, row.GetInt32("HttpStatus"))).ToList();
+            row.GetString("Operation")!, row.GetString("Status")!, row.GetInt64("ImageCount") ?? 0, row.GetInt32("HttpStatus"),
+            row.GetString("Model"), row.GetString("Deployment"))).ToList();
         return new(summary, items, filter.Page, filter.PageSize, rows.Count);
     }
 }

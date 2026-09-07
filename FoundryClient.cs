@@ -7,6 +7,8 @@ namespace ImageChat;
 
 public sealed class FoundryOptions
 {
+    // Existing root settings remain the GPT deployment; MAI is configured independently.
+    public MaiOptions Mai { get; set; } = new();
     public string Endpoint { get; set; } = "";
     public string Deployment { get; set; } = "gpt-image-2";
     public string ApiVersion { get; set; } = "2025-04-01-preview";
@@ -16,14 +18,14 @@ public sealed class FoundryOptions
     public string TokenScope { get; set; } = "https://cognitiveservices.azure.com/.default";
     public int TimeoutSeconds { get; set; } = 300;
 
-    public string? ConfigurationError()
+    public string? ConfigurationError(bool allowMai = false)
     {
         if (!Uri.TryCreate(Endpoint, UriKind.Absolute, out var uri) || uri.Scheme != "https" ||
             !string.IsNullOrEmpty(uri.UserInfo) || uri.AbsolutePath.Trim('/') != "" ||
             !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
             return "Set Foundry:Endpoint to the HTTPS resource root (not a project URL or complete API URL) in appsettings.Local.json, then restart.";
         if (string.IsNullOrWhiteSpace(Deployment)) return "Set Foundry:Deployment to your deployed model's deployment name.";
-        if (ApiStyle is not ("deployments" or "v1")) return "Foundry:ApiStyle must be deployments or v1.";
+        if (ApiStyle is not ("deployments" or "v1") && !(allowMai && ApiStyle == "mai")) return "Foundry:ApiStyle must be deployments or v1.";
         if (string.IsNullOrWhiteSpace(ApiVersion)) return "Set Foundry:ApiVersion to the version from your Foundry sample.";
         if (AuthMode is not ("ApiKey" or "DefaultAzureCredential")) return "Foundry:AuthMode must be ApiKey or DefaultAzureCredential.";
         if (AuthMode == "ApiKey" && string.IsNullOrWhiteSpace(ApiKey)) return "Set Foundry:ApiKey locally, or use DefaultAzureCredential, then restart.";
@@ -32,6 +34,7 @@ public sealed class FoundryOptions
 
     public Uri RequestUri(bool editing)
     {
+        if (ApiStyle == "mai") return new Uri($"{Endpoint.TrimEnd('/')}/mai/v1/images/{(editing ? "edits" : "generations")}");
         var path = ApiStyle == "v1" ? "openai/v1/images" : $"openai/deployments/{Uri.EscapeDataString(Deployment)}/images";
         return new Uri($"{Endpoint.TrimEnd('/')}/{path}/{(editing ? "edits" : "generations")}?api-version={Uri.EscapeDataString(ApiVersion)}");
     }
@@ -46,16 +49,20 @@ public sealed class FoundryClient(HttpClient client, FoundryOptions options, Tok
 {
     public async Task<ImageData> GenerateAsync(GenerationInput input, CancellationToken cancellationToken)
     {
-        if (options.ConfigurationError() is { } error) throw new AppException(503, error);
+        // Resolve per call; never mutate shared options/headers across parallel models.
+        var selected = new ModelCatalog(options).Resolve(input.Model);
+        var connection = selected.Connection;
+        selected.Validate(input.Size, input.Quality, input.Image != null);
+        if (selected.ConfigurationError is { } error) throw new AppException(503, error);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 30, 600)));
-        using var request = new HttpRequestMessage(HttpMethod.Post, options.RequestUri(input.Image is not null));
-        if (options.AuthMode == "ApiKey") request.Headers.Add("api-key", options.ApiKey);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(connection.TimeoutSeconds, 30, 600)));
+        using var request = new HttpRequestMessage(HttpMethod.Post, connection.RequestUri(input.Image is not null));
+        if (connection.AuthMode == "ApiKey") request.Headers.Add("api-key", connection.ApiKey);
         else
         {
             try
             {
-                var token = await credential.GetTokenAsync(new TokenRequestContext([options.TokenScope]), timeout.Token);
+                var token = await credential.GetTokenAsync(new TokenRequestContext([connection.TokenScope]), timeout.Token);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             }
             catch (AuthenticationFailedException)
@@ -67,18 +74,27 @@ public sealed class FoundryClient(HttpClient client, FoundryOptions options, Tok
         {
             var form = new MultipartFormDataContent();
             request.Content = form;
-            form.Add(new StringContent(options.Deployment), "model");
+            form.Add(new StringContent(connection.Deployment), "model");
             form.Add(new StringContent(input.Prompt), "prompt");
-            form.Add(new StringContent(input.Size), "size");
-            form.Add(new StringContent(input.Quality), "quality");
-            form.Add(new StringContent("1"), "n");
-            form.Add(new StringContent("png"), "output_format");
+            if (selected.Id == ModelCatalog.Gpt)
+            {
+                form.Add(new StringContent(input.Size), "size");
+                form.Add(new StringContent(input.Quality), "quality");
+                form.Add(new StringContent("1"), "n");
+                form.Add(new StringContent("png"), "output_format");
+            }
             var file = new ByteArrayContent(image.Bytes);
             file.Headers.ContentType = new MediaTypeHeaderValue(image.ContentType);
             form.Add(file, "image", image.ContentType == "image/png" ? "reference.png" : "reference.jpg");
         }
+        else if (selected.Id == ModelCatalog.Mai)
+        {
+            var dimensions = input.Size.Split('x');
+            request.Content = JsonContent.Create(new { model = connection.Deployment, prompt = input.Prompt,
+                width = int.Parse(dimensions[0]), height = int.Parse(dimensions[1]) });
+        }
         else
-            request.Content = JsonContent.Create(new { model = options.Deployment, prompt = input.Prompt,
+            request.Content = JsonContent.Create(new { model = connection.Deployment, prompt = input.Prompt,
                 size = input.Size, quality = input.Quality, n = 1, output_format = "png" });
 
         // Do not retry billable POSTs automatically: a lost response may still have produced an image.

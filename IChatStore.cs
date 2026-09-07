@@ -8,7 +8,8 @@ public interface IChatStore
     ImageData? GetImage(string id, string? ownerId = null);
     ImageData? LatestImage(Chat chat);
     string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment,
-        string? telemetryId = null, string operation = "unknown");
+        string? telemetryId = null, string operation = "unknown", string? model = null, string? deployment = null);
+    void SetRequestModel(string requestId, string model, string deployment);
     void FinishTurn(string chatId, string messageId, ImageData? image, string? error);
     void Delete(string id, string? ownerId = null);
     void ClaimLegacyChats(string ownerId);

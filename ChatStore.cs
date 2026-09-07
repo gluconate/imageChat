@@ -24,6 +24,8 @@ public sealed partial class ChatStore : IChatStore
             """;
         command.ExecuteNonQuery();
         InitializeTelemetry(db);
+        EnsureColumn(db, "messages", "model");
+        EnsureColumn(db, "messages", "deployment");
     }
 
     private SqliteConnection Open()
@@ -82,11 +84,12 @@ public sealed partial class ChatStore : IChatStore
             if (!reader.Read()) throw new AppException(404, "Chat not found.");
             chat = new(id, reader.GetString(0), reader.GetString(1), reader.GetString(2), []);
         }
-        command.CommandText = "SELECT id,role,text,created_at,size,quality,status,error,image IS NOT NULL FROM messages WHERE chat_id=$id ORDER BY rowid";
+        command.CommandText = "SELECT id,role,text,created_at,size,quality,status,error,image IS NOT NULL,model,deployment FROM messages WHERE chat_id=$id ORDER BY rowid";
         using var messages = command.ExecuteReader();
         while (messages.Read()) chat.Messages.Add(new(messages.GetString(0), messages.GetString(1), messages.GetString(2),
             messages.GetBoolean(8) ? ImageUrl(messages.GetString(0)) : null, messages.GetString(3), messages.GetString(4),
-            messages.GetString(5), messages.GetString(6), messages.IsDBNull(7) ? null : messages.GetString(7)));
+            messages.GetString(5), messages.GetString(6), messages.IsDBNull(7) ? null : messages.GetString(7),
+            messages.IsDBNull(9) ? null : messages.GetString(9), messages.IsDBNull(10) ? null : messages.GetString(10)));
         return chat;
     }
 
@@ -107,7 +110,8 @@ public sealed partial class ChatStore : IChatStore
         return message == null ? null : GetImage(message.Id);
     }
 
-    public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment, string? telemetryId = null, string operation = "unknown")
+    public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment, string? telemetryId = null,
+        string operation = "unknown", string? model = null, string? deployment = null)
     {
         using var db = Open();
         using var transaction = db.BeginTransaction();
@@ -116,7 +120,9 @@ public sealed partial class ChatStore : IChatStore
         {
             using var command = db.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "INSERT INTO messages VALUES($id,$chat,$role,$text,$created,$size,$quality,$status,NULL,$image,$type)";
+            command.CommandText = "INSERT INTO messages(id,chat_id,role,text,created_at,size,quality,status,error,image,content_type,model,deployment) VALUES($id,$chat,$role,$text,$created,$size,$quality,$status,NULL,$image,$type,$model,$deployment)";
+            command.Parameters.AddWithValue("$model", (object?)model ?? DBNull.Value);
+            command.Parameters.AddWithValue("$deployment", (object?)deployment ?? DBNull.Value);
             command.Parameters.AddWithValue("$id", role == "user" ? Guid.NewGuid().ToString("N") : assistantId);
             command.Parameters.AddWithValue("$chat", chat.Id);
             command.Parameters.AddWithValue("$role", role);

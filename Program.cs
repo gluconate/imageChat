@@ -58,6 +58,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 builder.Services.AddSingleton(services => services.GetRequiredService<IConfiguration>()
     .GetSection("Foundry").Get<FoundryOptions>() ?? new());
+builder.Services.AddSingleton<ModelCatalog>();
 builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
 builder.Services.AddHttpClient<IImageGenerator, FoundryClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -233,8 +234,9 @@ app.MapGet("/admin", (IWebHostEnvironment env) => Results.File(Path.Combine(env.
 app.MapGet("/api/admin/telemetry", (string? from, string? to, string? ip, int? page, int? pageSize, IChatStore chats) =>
     chats.Report(TelemetryFilter.Parse(from, to, ip, page, pageSize))).RequireAuthorization(policy => policy.RequireRole("admin"));
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
-app.MapGet("/api/status", () => new { configured = options.ConfigurationError() == null, deployment = options.Deployment,
-    authMode = options.AuthMode, message = options.ConfigurationError() ?? "Configuration ready. The connection is verified when you generate an image." });
+app.MapGet("/api/status", (ModelCatalog models) => new { configured = options.ConfigurationError() == null, deployment = options.Deployment,
+    authMode = options.AuthMode, message = options.ConfigurationError() ?? "Configuration ready. The connection is verified when you generate an image.",
+    defaultModel = ModelCatalog.Gpt, models = models.Statuses() });
 app.MapGet("/api/chats", (IChatStore store, ClaimsPrincipal user) => store.List(user.FindFirstValue(ClaimTypes.NameIdentifier)!));
 app.MapPost("/api/chats", (IChatStore store, ClaimsPrincipal user) => Results.Json(store.Create(user.FindFirstValue(ClaimTypes.NameIdentifier)!), statusCode: 201));
 app.MapGet("/api/chats/{id}", (string id, IChatStore store, ClaimsPrincipal user) => store.Get(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!));
@@ -252,11 +254,10 @@ app.MapGet("/api/images/{id}", (string id, bool? download, IChatStore store, Cla
     return Results.File(image.Bytes, image.ContentType, download == true ? $"image-{id}.{extension}" : null);
 });
 app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, IChatStore store,
-    IImageGenerator generator, ChatOperations operations, IHostApplicationLifetime lifetime) =>
+    IImageGenerator generator, ChatOperations operations, IHostApplicationLifetime lifetime, ModelCatalog models) =>
 {
     var ownerId = request.HttpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)!;
     store.Get(id, ownerId);
-    if (options.ConfigurationError() is { } configurationError) throw new AppException(503, configurationError);
     using var operation = operations.Acquire(id);
     string? assistantId = null;
     try
@@ -264,9 +265,12 @@ app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, I
         var chat = store.Get(id, ownerId);
         if (!request.HasFormContentType) throw new AppException(400, "Send text and images as multipart form data.");
         var form = await request.ReadFormAsync(request.HttpContext.RequestAborted);
+        var selected = models.Resolve(form.ContainsKey("model") ? form["model"].ToString() : null);
+        if (request.HttpContext.Items["telemetryId"] is string telemetryId)
+            store.SetRequestModel(telemetryId, selected.Id, selected.Connection.Deployment);
+        if (selected.ConfigurationError is { } configurationError) throw new AppException(503, configurationError);
         var size = form["size"].ToString();
-        var quality = form["quality"].ToString();
-        InputRules.ValidateOptions(size, quality);
+        var quality = selected.Id == ModelCatalog.Mai && !form.ContainsKey("quality") ? "default" : form["quality"].ToString();
         if (form.Files.Count > 1 || (form.Files.Count == 1 && form.Files[0].Name != "image"))
             throw new AppException(400, "Attach one image per message.");
         ImageData? attachment = null;
@@ -281,12 +285,13 @@ app.MapPost("/api/chats/{id}/messages", async (string id, HttpRequest request, I
         var usePrevious = form["usePreviousImage"].ToString() != "false";
         // An explicit attachment supersedes the latest generated image. History text remains context.
         var reference = attachment ?? (usePrevious ? store.LatestImage(chat) : null);
-        var input = new GenerationInput(InputRules.BuildPrompt(chat, prompt), size, quality, reference);
+    selected.Validate(size, quality, reference != null);
+    var input = new GenerationInput(InputRules.BuildPrompt(chat, prompt), size, quality, reference, selected.Id);
         if (store is AzureChatStore queuedStore)
             return Results.Json(queuedStore.QueueTurn(chat, prompt, size, quality, attachment,
-                request.HttpContext.Items["telemetryId"] as string, input), statusCode: 202);
+                request.HttpContext.Items["telemetryId"] as string, input, selected.Connection.Deployment), statusCode: 202);
         assistantId = store.BeginTurn(chat, prompt, size, quality, attachment,
-            request.HttpContext.Items["telemetryId"] as string, reference == null ? "generation" : "edit");
+            request.HttpContext.Items["telemetryId"] as string, reference == null ? "generation" : "edit", selected.Id, selected.Connection.Deployment);
         // Persist the result even if the browser disconnects. Only timeout/app shutdown cancels generation.
         var image = await generator.GenerateAsync(input, lifetime.ApplicationStopping);
         store.FinishTurn(id, assistantId, image, null);

@@ -137,6 +137,26 @@ public sealed class CloudStorageTests : IDisposable
     }
 
     [CloudFact]
+    public async Task QueuedModelSelectionSurvivesWorkerAndTelemetry()
+    {
+        var store = new AzureChatStore(storage);
+        var chat = store.Create("owner");
+        var request = store.StartRequest("owner", "user", null);
+        store.SetRequestModel(request, ModelCatalog.Mai, "mai-deployment");
+        var pending = store.QueueTurn(chat, "Draw", "1024x1024", "default", null, request,
+            new("Draw", "1024x1024", "default", null, ModelCatalog.Mai), "mai-deployment");
+        Assert.All(pending.Messages, message => Assert.Equal(ModelCatalog.Mai, message.Model));
+        var generator = new CountingGenerator();
+        await new AzureChatStore(storage).ProcessOneAsync(generator, default);
+        Assert.Equal(ModelCatalog.Mai, generator.LastInput!.Model);
+        Assert.All(store.Get(chat.Id).Messages, message => Assert.Equal("mai-deployment", message.Deployment));
+        var item = Assert.Single(store.Report(new(null, null, null)).Items);
+        Assert.Equal(ModelCatalog.Mai, item.Model);
+        Assert.Equal("mai-deployment", item.Deployment);
+        Assert.Equal("completed", item.Status);
+    }
+
+    [CloudFact]
     public async Task DuplicateQueueDeliveryDoesNotGenerateOrCountTwice()
     {
         var store = new AzureChatStore(storage);
@@ -210,9 +230,11 @@ public sealed class CloudStorageTests : IDisposable
     private sealed class CountingGenerator : IImageGenerator
     {
         public int Calls { get; private set; }
+        public GenerationInput? LastInput { get; private set; }
         public Task<ImageData> GenerateAsync(GenerationInput input, CancellationToken cancellationToken)
         {
             Calls++;
+            LastInput = input;
             return Task.FromResult(new ImageData([137, 80, 78, 71], "image/png"));
         }
     }

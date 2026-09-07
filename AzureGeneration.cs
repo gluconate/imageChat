@@ -10,9 +10,9 @@ public sealed partial class AzureChatStore
     internal static readonly TimeSpan JobVisibility = TimeSpan.FromMinutes(15);
 
     public Chat QueueTurn(Chat chat, string text, string size, string quality, ImageData? attachment,
-        string? telemetryId, GenerationInput input)
+        string? telemetryId, GenerationInput input, string? deployment = null)
     {
-        var id = StartTurn(chat, text, size, quality, attachment, telemetryId, input.Image == null ? "generation" : "edit", input);
+        var id = StartTurn(chat, text, size, quality, attachment, telemetryId, input.Image == null ? "generation" : "edit", input, input.Model, deployment);
         PublishJob(id);
         return Get(chat.Id);
     }
