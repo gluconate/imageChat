@@ -7,8 +7,9 @@
 - Resource group: `rg-imagechat-serverless`, East US.
 - Website: https://imagechat.lemonglacier-70bb8f6c.eastus.azurecontainerapps.io/login
 - Storage: `azst63py4jpyygbgg`.
-- Registry: `azcr63py4jpyygbgg`; deployed image tag: `serverless-20260906-1`.
+- Registry: `azcr63py4jpyygbgg`; deployed image tag: `flux-92b0349-20260907110953` (source commit `92b0349`).
 - Key Vault: `azkv63py4jpyygbgg`.
+- Configuration secret version: `0d877c8043994c27a6a4a92bdb5503e3`, including `Foundry:Flux` for deployment `FLUX.2-pro` and `Foundry:Mai` for deployment `mai-image-2.5-flash`.
 
 There are no VMs, managed disks, Azure Files mounts, or Caddy containers in this deployment. The root Dockerfile and compose.yaml remain for optional local use.
 
@@ -56,9 +57,12 @@ identityName=azid63py4jpyygbgg
 storageName=azst63py4jpyygbgg
 vaultName=azkv63py4jpyygbgg
 registryName=azcr63py4jpyygbgg
+configurationSecretVersion=0d877c8043994c27a6a4a92bdb5503e3
 ```
 
-Do not print secret values during configuration updates. A Key Vault secret update may require a web revision restart and new job executions before all processes use the new value. Do not delete the storage account or resource group unless intentionally deleting cloud application data.
+Build from credential-free source: appsettings.Local.json is excluded, but appsettings.json is included in the image. Do not build with credentials in that tracked file. The FLUX rollout used a clean archive of the source commit, leaving local uncommitted configuration untouched.
+
+Do not print secret values during configuration updates. After uploading a new Key Vault secret version, pass its version ID as `configurationSecretVersion` to deploy the web app and worker consistently. Changing a pinned secret requires redeployment with the new version. For a secret-only update, restart the active web revision afterward: secret configuration changes alone do not create a new revision, and this app reads settings at startup. New worker executions use the updated job configuration. Leaving this optional parameter empty uses the versionless secret URL instead. Do not delete the storage account or resource group unless intentionally deleting cloud application data.
 
 ## Validation
 

@@ -7,6 +7,8 @@ param registryName string
 @description('Immutable image tag built by the deployment script.')
 param imageTag string
 param appName string = 'imagechat'
+@description('Optional Key Vault configuration version for deterministic web and worker updates.')
+param configurationSecretVersion string = ''
 
 resource appEnvironment 'Microsoft.App/managedEnvironments@2026-03-02-preview' existing = { name: environmentName }
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2025-05-31-preview' existing = { name: identityName }
@@ -16,7 +18,8 @@ resource registry 'Microsoft.ContainerRegistry/registries@2026-09-01-preview' ex
 var identityConfig = { type: 'UserAssigned', userAssignedIdentities: { '${identity.id}': {} } }
 var image = '${registry.properties.loginServer}/imagechat:${imageTag}'
 var registries = [{ server: registry.properties.loginServer, identity: identity.id }]
-var secrets = [{ name: 'foundryconfig', keyVaultUrl: '${vault.properties.vaultUri}secrets/foundryconfig', identity: identity.id }]
+var configurationSecretUrl = '${vault.properties.vaultUri}secrets/foundryconfig${empty(configurationSecretVersion) ? '' : '/${configurationSecretVersion}'}'
+var secrets = [{ name: 'foundryconfig', keyVaultUrl: configurationSecretUrl, identity: identity.id }]
 var mounts = [{ volumeName: 'configuration', mountPath: '/run/secrets' }]
 var volumes = [{ name: 'configuration', storageType: 'Secret', secrets: [{ secretRef: 'foundryconfig', path: 'foundry.json' }] }]
 var healthRequest = {
