@@ -40,8 +40,11 @@ public sealed partial class AzureChatStore
                 (job.GetDateTimeOffset("PublishedAt") == null || job.GetDateTimeOffset("PublishedAt") < now - TimeSpan.FromMinutes(5)))
                 PublishJob(job.RowKey[1..]);
         }
-        foreach (var chat in storage.Rows("c").Where(row => row.GetBoolean("Deleted") == true))
-            CleanupDeletedChat(chat.GetString("Id")!);
+        foreach (var chat in storage.Rows("c"))
+        {
+            if (chat.GetBoolean("Deleted") == true) CleanupDeletedChat(chat.GetString("Id")!);
+            else RecoverExpiredText(chat);
+        }
         foreach (var row in storage.Rows("", "rate").Where(row => row.GetInt64("Minute") < now.ToUnixTimeSeconds() / 60 - 120))
             storage.Table.DeleteEntity(row.PartitionKey, row.RowKey, row.ETag);
     }

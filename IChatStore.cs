@@ -11,6 +11,8 @@ public interface IChatStore
         string? telemetryId = null, string operation = "unknown", string? model = null, string? deployment = null);
     void SetRequestModel(string requestId, string model, string deployment);
     void FinishTurn(string chatId, string messageId, ImageData? image, string? error);
+    void UpdateTextTurn(string chatId, string messageId, string text);
+    void FinishTextTurn(string chatId, string messageId, string text, string? error, int httpStatus = 200);
     void Delete(string id, string? ownerId = null);
     void ClaimLegacyChats(string ownerId);
     string StartRequest(string userId, string username, string? ip);

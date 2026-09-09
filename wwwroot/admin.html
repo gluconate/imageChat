@@ -11,20 +11,20 @@
 <body>
   <a class="skip-link" href="#admin-title">Skip to administration</a>
   <header class="portal-header">
-    <a class="portal-brand" href="/" aria-label="Frame image studio"><span class="frame-mark" aria-hidden="true">▧</span>Frame<span>/ administration</span></a>
+    <a class="portal-brand" href="/" aria-label="Frame creative studio"><span class="frame-mark" aria-hidden="true">▧</span>Frame<span>/ administration</span></a>
     <nav class="portal-nav" aria-label="Account navigation"><span id="admin-account" class="account-name"></span><a href="/">Studio ↗</a><button id="admin-logout" class="secondary-button" type="button" hidden>Sign out</button></nav>
   </header>
   <main class="portal-main">
-    <div class="page-heading"><div><p class="eyebrow">BEHIND THE STUDIO</p><h1 id="admin-title" tabindex="-1">A little perspective.</h1><p class="muted">Image activity and the people who make it.</p></div><span class="access-badge">Administrators only</span></div>
+    <div class="page-heading"><div><p class="eyebrow">BEHIND THE STUDIO</p><h1 id="admin-title" tabindex="-1">A little perspective.</h1><p class="muted">Image and text activity, and the people behind it.</p></div><span class="access-badge">Administrators only</span></div>
     <p id="admin-status" class="status" role="status">Checking administrator access…</p>
     <p id="admin-error" class="notice error" role="alert" hidden></p>
     <button id="admin-retry" class="secondary-button" type="button" hidden>Retry access check</button>
-    <section id="forbidden" class="card" aria-labelledby="forbidden-title" hidden><h2 id="forbidden-title">This space is for administrators.</h2><p>Your account does not have access to administration. Return to the studio to work on your images.</p><a class="primary-button" href="/">Back to studio</a></section>
+    <section id="forbidden" class="card" aria-labelledby="forbidden-title" hidden><h2 id="forbidden-title">This space is for administrators.</h2><p>Your account does not have access to administration. Return to the studio to continue creating.</p><a class="primary-button" href="/">Back to studio</a></section>
     <div id="admin-content" hidden>
-      <nav class="section-nav" aria-label="Administration sections"><a href="#activity">Image activity</a><a href="#users">Accounts</a></nav>
+      <nav class="section-nav" aria-label="Administration sections"><a href="#activity">Image &amp; text activity</a><a href="#users">Accounts</a></nav>
       <section id="activity" class="admin-section" aria-labelledby="activity-title">
-        <div class="section-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h2 id="activity-title">Image activity</h2></div><button id="telemetry-refresh" class="secondary-button" type="button">Refresh activity</button></div>
-        <p id="activity-model-help" class="section-description">Totals cover every matching historical record, not just this page. Deleting a chat does not reduce these totals. Older records are shown separately as legacy / unknown: their client IP, request type, model and deployment may be unavailable. Model labels reflect each recorded request, not today’s configuration. Studio model options are GPT-image-2, MAI-Image-2.5-Flash (Preview), and FLUX.2-pro.</p>
+        <div class="section-heading"><div><p class="eyebrow">THE BIG PICTURE</p><h2 id="activity-title">Image &amp; text activity</h2></div><button id="telemetry-refresh" class="secondary-button" type="button">Refresh activity</button></div>
+        <p id="activity-model-help" class="section-description">Totals cover every matching historical record, not just this page. Deleting a chat does not reduce these totals. Requests, failed, rejected and pending totals include text chat; image totals count only images and are unchanged. Older records are shown separately as legacy / unknown: their client IP, request type, model and deployment may be unavailable. Model labels reflect each recorded request, not today’s configuration. Image choices remain GPT-image-2, MAI-Image-2.5-Flash (Preview), and FLUX.2-pro. Text chat uses GPT-5.6-sol and appears as “Text chat” in the operation column.</p>
         <form id="filter-form" class="card filter-card">
           <fieldset id="filter-fields">
             <legend>Filter historical requests</legend>
@@ -47,13 +47,13 @@
             <div class="metric accent"><dt>All images</dt><dd id="total-totalImages">—</dd><small>Generated + edited + legacy</small></div>
           </dl>
           <dl class="request-totals"><div><dt>Requests</dt><dd id="total-requests">—</dd></div><div><dt>Failed</dt><dd id="total-failed">—</dd></div><div><dt>Rejected</dt><dd id="total-rejected">—</dd></div><div><dt>Pending</dt><dd id="total-pending">—</dd></div></dl>
-          <div class="table-scroll" role="region" aria-label="Historical image requests with recorded model and deployment; scroll horizontally for all columns" aria-describedby="activity-model-help" tabindex="0">
+          <div class="table-scroll" role="region" aria-label="Historical image and text requests with recorded model and deployment; scroll horizontally for all columns" aria-describedby="activity-model-help" tabindex="0">
             <table class="activity-table"><caption id="activity-caption">Historical requests · local times</caption><thead><tr><th scope="col">Requested</th><th scope="col">Completed</th><th scope="col">Account</th><th scope="col">Client IP</th><th scope="col">Operation</th><th scope="col">Model</th><th scope="col">Deployment</th><th scope="col">Status</th><th scope="col">Images</th><th scope="col">HTTP</th><th scope="col">Request ID</th></tr></thead><tbody id="telemetry-rows"></tbody></table>
           </div>
           <p id="telemetry-empty" class="empty-state" hidden>No requests match these filters.</p>
           <div class="pagination" aria-label="Activity pages"><p id="page-description">No page loaded.</p><div><button id="page-previous" class="secondary-button" type="button" disabled>Previous</button><button id="page-next" class="secondary-button" type="button" disabled>Next</button></div></div>
         </div>
-        <p class="privacy-note">Only request metadata is shown. Telemetry contains no passwords, prompts or image content. Counts and client addresses are supplied by the server, never by a client identity field.</p>
+        <p class="privacy-note">Only request metadata is shown. Telemetry contains no passwords, prompts, replies or image content. Counts and client addresses are supplied by the server, never by a client identity field.</p>
       </section>
       <section id="users" class="admin-section" aria-labelledby="users-title">
         <div class="section-heading"><div><p class="eyebrow">PEOPLE &amp; PERMISSIONS</p><h2 id="users-title">Studio accounts</h2></div><div class="form-actions"><button id="users-refresh" class="secondary-button" type="button">Refresh accounts</button><button id="user-create" class="primary-button" type="button">Create account</button></div></div>

@@ -33,6 +33,7 @@
     if (id === "gpt-image-2") return "GPT-image-2";
     if (id === "mai-image-2.5-flash") return "MAI-Image-2.5-Flash (Preview)";
     if (id === "flux.2-pro") return "FLUX.2-pro";
+    if (id === "gpt-5.6-sol") return "GPT-5.6-sol";
     return typeof id === "string" && id.trim() && !/^gpt$/i.test(id.trim()) ? id : "Legacy / unknown model";
   }
 
@@ -147,7 +148,7 @@
     for (const item of result.items) {
       if (!item || typeof item.id !== "string") throw new Error("The server returned an invalid activity record.");
       const row = node("tr");
-      const operation = item.operation === "generation" ? "Generation" : item.operation === "edit" ? "Edit" : "Legacy / unknown";
+      const operation = item.operation === "generation" ? "Generation" : item.operation === "edit" ? "Edit" : item.operation === "chat" ? "Text chat" : "Legacy / unknown";
       for (const value of [formatTime(item.requestedAt), formatTime(item.completedAt), item.username || "Historical / unavailable", item.ip || "Unavailable", operation]) row.append(node("td", value));
       row.append(node("td", modelLabel(item.model)), node("td", typeof item.deployment === "string" && item.deployment.trim() ? item.deployment : "Not recorded"));
       const status = node("td");

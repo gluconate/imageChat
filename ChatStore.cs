@@ -113,8 +113,16 @@ public sealed partial class ChatStore : IChatStore
     public string BeginTurn(Chat chat, string text, string size, string quality, ImageData? attachment, string? telemetryId = null,
         string operation = "unknown", string? model = null, string? deployment = null)
     {
+        ArgumentNullException.ThrowIfNull(text);
+        if (operation == "chat")
+        {
+            if (model != ChatModelOptions.ModelId || size != "text" || quality != "text")
+                throw new AppException(400, "Text turns require the chat model and text settings.");
+            if (attachment != null) attachment = InputRules.ValidateImage(attachment.Bytes);
+        }
         using var db = Open();
         using var transaction = db.BeginTransaction();
+        if (operation == "chat") CheckTextBegin(db, transaction, chat);
         var assistantId = Guid.NewGuid().ToString("N");
         foreach (var role in new[] { "user", "assistant" })
         {

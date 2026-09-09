@@ -2,12 +2,21 @@
 
 (() => {
   const DEFAULT_IMAGE_PROMPT = "Create a new variation of this image, preserving its main subject and style.";
+  const DEFAULT_CHAT_IMAGE_PROMPT = "Describe this image and help me understand it.";
   const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+  const MAX_IMAGE_PROMPT_CHARS = 8000;
+  const DEFAULT_CHAT_PROMPT_CHARS = 64000;
+  const MAX_CHAT_PROMPT_CHARS = 256000;
+  const TRUNCATED_CONTEXT_NOTICE = "Earlier text or images were shortened or omitted from this reply’s context to fit the app’s configured budgets. Saved history is unchanged.";
   const ACTIVE_CHAT_KEY = "frame.activeChatId";
   const POLL_MS = 3000;
   const GPT_MODEL = "gpt-image-2";
   const MAI_MODEL = "mai-image-2.5-flash";
   const FLUX_MODEL = "flux.2-pro";
+  const CHAT_MODEL = "gpt-5.6-sol";
+  const MAX_STREAM_BYTES = 2 * 1024 * 1024;
+  const MAX_EVENT_BYTES = 256 * 1024;
+  const MAX_REPLY_CHARS = 12000;
   // Local capabilities keep all choices visible when readiness is unavailable.
   // Readiness is always taken from the selected model, never another deployment.
   const MODEL_DEFAULTS = new Map([
@@ -39,7 +48,7 @@
   };
 
   function newDraft() {
-    return { prompt: "", model: GPT_MODEL, quality: "medium", size: "1024x1024", useLatest: true,
+    return { prompt: "", mode: "images", model: GPT_MODEL, quality: "medium", size: "1024x1024", useLatest: true,
       attachment: null, attachmentUrl: null, version: 0 };
   }
 
@@ -56,6 +65,14 @@
   const isActive = (session) => !state.stopped && activeSession() === session;
   const pendingChat = (chat) => Boolean(chat?.messages.some((message) => message.role === "assistant" && message.status === "pending"));
   const chatBusy = (session) => Boolean(session.request || session.serverPending);
+  const textMode = (session) => session.draft.mode === "chat";
+  const canAttach = (session) => !textMode(session) || state.status?.chatModel?.supportsImages === true;
+  const promptLimit = (session) => textMode(session)
+    ? state.status?.chatModel?.maxPromptCharacters ?? DEFAULT_CHAT_PROMPT_CHARS : MAX_IMAGE_PROMPT_CHARS;
+  const selectedModelId = (session) => textMode(session) ? CHAT_MODEL : session.draft.model;
+  const textMessage = (message) => message?.model === CHAT_MODEL;
+  const turnMode = (session) => session.request?.mode ||
+    (textMessage([...session.chat?.messages || []].reverse().find((message) => message.role === "assistant")) ? "chat" : "images");
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -79,10 +96,12 @@
   }
 
   function modelLabel(id) {
+    if (id === CHAT_MODEL) return "GPT-5.6-sol";
     return MODEL_DEFAULTS.get(id)?.label || (text(id) && !/^gpt$/i.test(id.trim()) ? id : "Legacy / unknown model");
   }
 
   function modelStatus(id) {
+    if (id === CHAT_MODEL) return state.status?.chatModel || null;
     return state.status?.models.find((model) => model.id === id) || null;
   }
 
@@ -95,11 +114,14 @@
   }
 
   function effectiveEdit(session) {
+    if (textMode(session)) return false;
     return Boolean(session.draft.attachment || (session.draft.useLatest && session.chat?.messages.some(
       (message) => message.role === "assistant" && message.status === "completed" && message.imageUrl)));
   }
 
   function normalizeDraft(session) {
+    // Text mode must not normalize or discard the dormant image settings.
+    if (textMode(session)) return;
     const draft = session.draft;
     const model = modelCapabilities(draft.model);
     if (!model) return;
@@ -124,11 +146,50 @@
     select.value = value;
   }
 
+  function inputError(session) {
+    if (session.draft.prompt.length > promptLimit(session)) {
+      return `${textMode(session) ? "Chat" : "Images"} allows up to ${promptLimit(session).toLocaleString()} characters per prompt. Your full prompt is kept; shorten it or switch modes before sending.`;
+    }
+    if (session.draft.attachment && !canAttach(session)) {
+      return "This backend does not support images in Chat. Remove the attached image to send text, or switch to Images. The attachment will not be silently ignored.";
+    }
+    return "";
+  }
+
   function renderModelControls(session) {
     normalizeDraft(session);
     const draft = session.draft;
     const model = modelCapabilities(draft.model);
     selectOptions("model", [...MODEL_DEFAULTS.values()].map((item) => [item.id, text(modelStatus(item.id)?.label, item.label)]), draft.model);
+    const chat = textMode(session);
+    $("mode").value = draft.mode;
+    $("mode").querySelector('[value="chat"]').disabled = !state.status?.chatModel;
+    $("image-model-control").hidden = chat;
+    $("chat-model-label").hidden = !chat;
+    $("image-options").hidden = chat;
+    $("attachment-preview").hidden = !draft.attachment;
+    $("chat-attachment-help").hidden = !chat || canAttach(session);
+    $("chat-input-help").hidden = !chat;
+    $("chat-context-help").hidden = !chat;
+    $("composer").classList.toggle("text-mode", chat);
+    // Changing maxlength does not change the textarea value. Never slice an owned draft.
+    $("prompt").maxLength = promptLimit(session);
+    $("prompt-count").textContent = `${draft.prompt.length.toLocaleString()} / ${promptLimit(session).toLocaleString()} characters`;
+    $("prompt-count").classList.toggle("over-limit", draft.prompt.length > promptLimit(session));
+    $("prompt").setAttribute("aria-invalid", String(Boolean(inputError(session))));
+    $("prompt-label").textContent = chat ? "Message GPT-5.6-sol" : "Describe the image you want to create";
+    $("prompt").placeholder = chat ? "Ask a question, explore an idea, or describe an attached image…" : "Describe something only you can imagine…";
+    $("composer-input-help").textContent = `${canAttach(session) ? "Drop or paste one image" : "Text only"} · Enter to send · Shift + Enter for a new line`;
+    if (chat) {
+      const capability = state.status?.chatModel;
+      $("chat-input-help").textContent = canAttach(session) ? "Text + one PNG / JPEG · up to 20 MB" : "Text only on this backend";
+      const budgets = `App context budgets: up to ${(capability?.maxContextCharacters ?? 256000).toLocaleString()} characters, ${(capability?.maxContextMessages ?? 200).toLocaleString()} messages${canAttach(session) ? ` and ${(capability?.maxContextImages ?? 8).toLocaleString()} images (${((capability?.maxContextImageBytes ?? 33554432) / (1024 * 1024)).toLocaleString(undefined, { maximumFractionDigits: 2 })} MB total image data)` : ""}. These are app budgets, not the model’s token limit.${canAttach(session) ? " Prior images are included automatically within these budgets; Use latest image is not used in Chat." : ""}`;
+      $("chat-context-help").textContent = budgets;
+      const help = `GPT-5.6-sol: up to ${promptLimit(session).toLocaleString()} characters per prompt. ${canAttach(session) ? "Send text, an image, or both." : "Image input is not supported by this backend."} ${capability?.streaming ? "Replies appear as they arrive." : "The saved reply appears when ready; this provider is not streaming tokens."}`;
+      $("model-help-text").textContent = help;
+      $("settings-model-controls").textContent = `${help} ${budgets}`;
+      return;
+    }
     if (!model) return;
     const sizes = effectiveEdit(session) ? model.editSizes : model.sizes;
     selectOptions("size", sizes.map((size) => [size, size === "auto" ? "Model determined" : size.replaceAll("x", " × ")]), draft.size);
@@ -159,7 +220,33 @@
         deployment: text(model.deployment), authMode: text(model.authMode), message: text(model.message),
         supportsEditing: model.supportsEditing, sizes: [...model.sizes], editSizes: [...model.editSizes], qualities: [...model.qualities] };
     });
-    return { models: safeModels };
+    // A separate capability, never an image-selector entry or a legacy fallback.
+    const chat = status.chatModel;
+    let chatModel = null;
+    if (chat !== undefined && chat !== null) {
+      if (chat.id !== CHAT_MODEL || chat.mode !== "chat" || typeof chat.configured !== "boolean" || typeof chat.streaming !== "boolean" ||
+          (chat.supportsImages !== undefined && typeof chat.supportsImages !== "boolean")) {
+        throw new Error("The backend returned invalid text-chat readiness. Check readiness again before sending.");
+      }
+      // Optional fields keep older readiness payloads usable without assuming image support.
+      // Reject coercion, fractions and implausible budgets; cap the UI prompt allowance separately.
+      const budget = (key, fallback, min, max) => {
+        const value = chat[key] === undefined ? fallback : chat[key];
+        if (!Number.isSafeInteger(value) || value < min || value > max) {
+          throw new Error("The backend returned invalid chat budgets. Check readiness again before sending.");
+        }
+        return value;
+      };
+      chatModel = { id: CHAT_MODEL, label: "GPT-5.6-sol", mode: "chat", configured: chat.configured,
+        streaming: chat.streaming, supportsImages: chat.supportsImages === true,
+        maxPromptCharacters: Math.min(budget("maxPromptCharacters", DEFAULT_CHAT_PROMPT_CHARS, 1, 1048576), MAX_CHAT_PROMPT_CHARS),
+        maxContextCharacters: budget("maxContextCharacters", 256000, 1, 4194304),
+        maxContextMessages: budget("maxContextMessages", 200, 1, 1000),
+        maxContextImages: budget("maxContextImages", 8, 0, 100),
+        maxContextImageBytes: budget("maxContextImageBytes", 33554432, 0, 268435456),
+        deployment: text(chat.deployment), authMode: text(chat.authMode), message: text(chat.message) };
+    }
+    return { models: safeModels, chatModel };
   }
 
   function errorText(error) {
@@ -191,8 +278,9 @@
     $("app-error").hidden = !session.error;
     $("app-notice").textContent = session.notice;
     $("app-notice").hidden = !session.notice;
-    $("composer-error").textContent = session.draftError;
-    $("composer-error").hidden = !session.draftError;
+    const error = session.draftError || inputError(session);
+    $("composer-error").textContent = error;
+    $("composer-error").hidden = !error;
   }
 
   function storedChatId() {
@@ -311,7 +399,7 @@
     $("chat-list").replaceChildren();
     $("messages").replaceChildren();
     $("chat-title").textContent = "Session ended";
-    $("conversation-title").textContent = "Image conversation";
+    $("conversation-title").textContent = "Conversation";
     $("account-name").textContent = "Signed out";
     $("settings-account").textContent = "Signed out";
     $("history-announcement").textContent = "";
@@ -363,7 +451,7 @@
     state.authBusy = true;
     updateControls();
     try {
-      const confirmed = await confirmAction({ title: "Sign out of Frame?", description: `${hasWork ? "You have in-memory drafts, attachments or running chats. " : ""}Signing out clears unsent drafts and attachments in this tab and revokes all sessions for this account, including other browsers. Saved chats remain; running image requests may still finish on the server.`, label: "Sign out", cancelLabel: "Stay in studio" });
+      const confirmed = await confirmAction({ title: "Sign out of Frame?", description: `${hasWork ? "You have in-memory drafts, attachments or running chats. " : ""}Signing out clears unsent drafts and attachments in this tab and revokes all sessions for this account, including other browsers. Saved chats remain; running requests may still finish on the server.`, label: "Sign out", cancelLabel: "Stay in studio" });
       if (!confirmed || state.stopped) return;
       if (!await checkAccount()) return;
       await api("/api/auth/logout", { method: "POST" });
@@ -389,7 +477,7 @@
     updateControls();
     try {
       const hasWork = unsavedWork();
-      const confirmed = await confirmAction({ title: "Change password and sign out?", description: `${hasWork ? "You have drafts, attachments or running chats. " : ""}Saving your new password ends your session and clears in-memory drafts and attachments. Saved chats remain; running image requests may still finish.`, label: "Change password", cancelLabel: "Keep current password" });
+      const confirmed = await confirmAction({ title: "Change password and sign out?", description: `${hasWork ? "You have drafts, attachments or running chats. " : ""}Saving your new password ends your session and clears in-memory drafts and attachments. Saved chats remain; running requests may still finish.`, label: "Change password", cancelLabel: "Keep current password" });
       if (!confirmed || state.stopped) { $("password-status").textContent = "Change cancelled. Re-enter passwords to try again."; return; }
       if (!await checkAccount()) return;
       $("password-status").textContent = "Changing password…";
@@ -456,7 +544,8 @@
     const request = session.request;
     const disabled = locked();
     renderModelControls(session);
-    const selected = modelStatus(session.draft.model);
+    const chat = textMode(session);
+    const selected = modelStatus(selectedModelId(session));
     const configured = selected?.configured === true;
     const editingUnsupported = effectiveEdit(session) && selected?.supportsEditing === false;
     const accountLocked = !state.user || state.authBusy;
@@ -464,11 +553,13 @@
     $("password-open").disabled = accountLocked;
     $("password-fields").disabled = accountLocked;
     for (const button of document.querySelectorAll('[data-close="password-dialog"]')) button.disabled = state.authBusy;
-    for (const id of ["prompt", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
+    for (const id of ["prompt", "mode", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
       $(id).disabled = disabled;
     }
-    $("quality").disabled = disabled || !hasQualityControl(session.draft.model);
-    $("size").disabled = disabled || session.draft.size === "auto";
+    for (const id of ["model", "use-latest"]) $(id).disabled = disabled || chat;
+    for (const id of ["image-input", "attach-button"]) $(id).disabled = disabled || !canAttach(session);
+    $("quality").disabled = disabled || chat || !hasQualityControl(session.draft.model);
+    $("size").disabled = disabled || chat || session.draft.size === "auto";
     $("new-chat").disabled = Boolean(state.busy || accountLocked);
     $("refresh-history").disabled = Boolean(state.historyRead || accountLocked);
     for (const button of document.querySelectorAll(".chat-select")) button.disabled = Boolean(state.busy);
@@ -478,21 +569,29 @@
     for (const button of document.querySelectorAll(".suggestion")) button.disabled = disabled;
     $("brand-home").setAttribute("aria-disabled", String(Boolean(state.busy)));
     const hasInput = Boolean(session.draft.prompt.trim() || session.draft.attachment);
-    $("send-button").disabled = disabled || !hasInput || !configured || editingUnsupported;
-    $("send-button").title = !configured ? `Check ${modelLabel(session.draft.model)} setup in Settings before generating.`
+    const invalidInput = inputError(session);
+    $("send-button").disabled = disabled || !hasInput || !configured || editingUnsupported || Boolean(invalidInput);
+    $("send-button").title = !configured ? `Check ${modelLabel(selectedModelId(session))} setup in Settings before sending.`
       : editingUnsupported ? "This model does not support editing. Remove the attachment and turn off Use latest image."
-      : disabled ? "This chat is busy. You can switch or start another chat." : `Generate one image with ${modelLabel(session.draft.model)}`;
-    $("send-label").textContent = request?.phase === "unconfirmed" ? "Awaiting result" : chatBusy(session) ? "Creating…" : "Generate";
+      : invalidInput || (disabled ? "This chat is busy. You can switch or start another chat." : chat ? "Send to GPT-5.6-sol" : `Generate one image with ${modelLabel(session.draft.model)}`);
+    $("send-label").textContent = request?.phase === "unconfirmed" ? "Awaiting result" : chatBusy(session) ? (turnMode(session) === "chat" ? "Responding…" : "Creating…") : chat ? "Send" : "Generate";
     $("check-result").disabled = Boolean(session.read);
     $("resume-draft").hidden = request?.phase !== "unconfirmed";
     $("resume-draft").disabled = Boolean(state.busy || session.read || session.serverPending || !request?.checked);
-    $("image-only-help").hidden = !session.draft.attachment || Boolean(session.draft.prompt.trim());
+    $("image-only-help").hidden = !canAttach(session) || !session.draft.attachment || Boolean(session.draft.prompt.trim());
+    $("image-only-help").textContent = `No text? We’ll send: “${chat ? DEFAULT_CHAT_IMAGE_PROMPT : DEFAULT_IMAGE_PROMPT}”`;
     $("refresh-status").disabled = state.statusLoading || accountLocked;
     $("generation-progress").hidden = !session.serverPending && request?.phase !== "sending";
+    const responding = turnMode(session) === "chat";
+    $("generation-label").textContent = responding ? "Responding" : "Making space for your idea…";
+    $("generation-help").textContent = responding
+      ? "You can switch or start other chats while the reply arrives. If the stream is interrupted (or reaches 3 minutes), check the saved result; never resend automatically."
+      : "Generation can take up to 5 minutes. You can switch or start other chats now. Each chat allows one turn at a time; saved results are checked automatically.";
     $("recovery-notice").hidden = request?.phase !== "unconfirmed";
     $("recovery-text").textContent = request?.detail || "";
     $("navigation-progress").hidden = !state.busy;
     $("conversation").setAttribute("aria-busy", String(Boolean(state.busy === "loading" || chatBusy(session))));
+    renderFeedback();
     updateElapsed();
   }
 
@@ -505,12 +604,12 @@
 
   function renderStatus() {
     if (state.stopped) return;
-    const id = activeSession().draft.model;
+    const id = selectedModelId(activeSession());
     const selected = modelStatus(id);
     const label = text(selected?.label, modelLabel(id));
     const configured = selected?.configured === true;
     const unknown = !selected;
-    const setupPath = MODEL_DEFAULTS.get(id).setupPath;
+    const setupPath = id === CHAT_MODEL ? "the GPT-5.6-sol text-chat configuration" : MODEL_DEFAULTS.get(id).setupPath;
     $("status-chip-text").textContent = state.statusLoading ? "Checking setup" : configured ? "Configured · not tested" : unknown ? "Setup unavailable" : "Setup needed";
     $("status-chip").title = `${label}: ${$("status-chip-text").textContent}`;
     $("model-readiness").textContent = $("status-chip-text").textContent;
@@ -522,7 +621,7 @@
       ? `${text(state.statusError, "The backend has not reported readiness for this model.")} Check ${setupPath} on the server, then check readiness again in Settings.`
       : `${text(selected.message, "Configure this model on the backend, then check readiness again in Settings. Your draft can stay here.")} Setup: ${setupPath}. Other models have independent readiness.`;
     $("settings-model").textContent = `${label} · ${id}`;
-    $("settings-readiness").textContent = state.statusLoading ? "Checking backend configuration…" : configured ? "Configured — connectivity has not been tested" : unknown ? "Unable to check readiness" : "Not configured — generation is unavailable";
+    $("settings-readiness").textContent = state.statusLoading ? "Checking backend configuration…" : configured ? "Configured — connectivity has not been tested" : unknown ? "Unable to check readiness" : "Not configured — sending is unavailable";
     $("settings-readiness").classList.toggle("not-ready", !configured);
     $("settings-deployment").textContent = text(selected?.deployment, "Not reported");
     $("settings-auth").textContent = text(selected?.authMode, "Not reported");
@@ -710,24 +809,27 @@
     }
     for (const row of rows.values()) row.remove();
     $("history-empty").hidden = chats.length > 0;
-    $("history-empty").textContent = query ? "No chats match that title. Try another search." : state.historyLoaded ? "Your ideas will live here. Start a chat to make your first image." : state.busy === "loading" ? "Loading your conversations…" : "History is unavailable. Use Refresh to try again.";
+    $("history-empty").textContent = query ? "No chats match that title. Try another search." : state.historyLoaded ? "Your ideas will live here. Start a conversation to begin." : state.busy === "loading" ? "Loading your conversations…" : "History is unavailable. Use Refresh to try again.";
   }
 
   function badgeStatus(session) {
-    if (session.request?.phase === "unconfirmed") return session.serverPending ? `Creating · ${elapsed(session)} · check result` : "Check result";
-    if (chatBusy(session)) return `Creating · ${elapsed(session)}`;
+    const progress = turnMode(session) === "chat" ? "Responding" : "Creating";
+    const chat = (session.indicatorMode || turnMode(session)) === "chat";
+    if (session.request?.phase === "unconfirmed") return session.serverPending ? `${progress} · ${elapsed(session)} · check result` : "Check result";
+    if (chatBusy(session)) return `${progress} · ${elapsed(session)}`;
     if (session.missing) return "Removed · draft kept";
-    if (session.indicator === "completed") return "Image ready";
-    if (session.indicator === "failed") return "Generation failed";
+    if (session.indicator === "completed") return chat ? "Reply ready" : "Image ready";
+    if (session.indicator === "failed") return chat ? "Chat failed" : "Generation failed";
     return hasDraft(session) ? "Draft · in this tab" : "";
   }
 
-  function setIndicator(session, value) {
-    if (session.indicator === value) return;
+  function setIndicator(session, value, mode = turnMode(session)) {
+    if (session.indicator === value && session.indicatorMode === mode) return;
     session.indicator = value;
+    session.indicatorMode = mode;
     if (!isActive(session) && !state.stopped && value) {
       const title = text(session.chat?.title, text(state.history.find((chat) => chat.id === session.id)?.title, "Untitled chat"));
-      $("history-announcement").textContent = `${title}: ${value === "completed" ? "image ready" : value === "failed" ? "generation failed; draft kept" : "check the saved result; draft kept"}.`;
+      $("history-announcement").textContent = `${title}: ${value === "completed" ? (mode === "chat" ? "reply ready" : "image ready") : value === "failed" ? (mode === "chat" ? "chat failed; draft kept" : "generation failed; draft kept") : "check the saved result; draft kept"}.`;
     }
   }
 
@@ -766,7 +868,7 @@
     open.append(img, badge);
     open.addEventListener("click", () => openPreview(url, img.alt));
     const caption = element("figcaption", "image-caption");
-    const meta = [message.role === "assistant" ? modelLabel(message.model) : "",
+    const meta = textMessage(message) ? "Chat attachment" : [message.role === "assistant" ? modelLabel(message.model) : "",
       message.size === "auto" ? "Model determined" : text(message.size).replaceAll("x", " × "),
       message.quality === "default" ? "Model default" : text(message.quality) ? `${message.quality} quality` : ""].filter(Boolean).join(" · ");
     const download = element("a", "download-link", "Download");
@@ -792,12 +894,20 @@
     $("welcome").hidden = Boolean(chat);
     $("conversation").hidden = !chat;
     $("chat-title").textContent = chat ? text(chat.title, "Untitled chat") : "A fresh perspective";
-    $("conversation-title").textContent = chat ? text(chat.title, "Image conversation") : "Image conversation";
-    document.title = chat ? `${text(chat.title, "Untitled chat")} — Frame` : "Frame / image studio";
-    const fragment = document.createDocumentFragment();
+    $("conversation-title").textContent = chat ? text(chat.title, "Conversation") : "Conversation";
+    document.title = chat ? `${text(chat.title, "Untitled chat")} — Frame` : "Frame / creative studio";
+    const list = $("messages");
+    const rows = new Map([...list.children].map((row) => [row.dataset.messageId, row]));
+    let position = 0;
     if (chat) {
       for (const message of chat.messages) {
+        const previous = rows.get(message.id);
+        rows.delete(message.id);
+        const signature = JSON.stringify(message);
+        if (previous?.dataset.signature === signature) { position += 1; continue; }
         const article = element("article", `message message-${message.role}`);
+        article.dataset.messageId = message.id;
+        article.dataset.signature = signature;
         article.setAttribute("aria-label", `${message.role === "user" ? "You" : "Frame"}${message.status === "failed" ? ", failed" : ""}`);
         const header = element("div", "message-header");
         const avatar = element("span", "message-avatar", message.role === "user" ? "Y" : "✳");
@@ -810,30 +920,34 @@
         if (text(message.deployment)) model.title = `Deployment: ${message.deployment}`;
         header.append(model, time);
         const content = element("div", "message-content");
-        // Render the actual saved user text, including any backend fallback, never an optimistic guess.
-        if (text(message.text)) content.append(element("p", "message-text", message.text));
+        // Stream excerpts are merged with this request's full prompt only after its saved turn is identified.
+        if (text(message.text) || textMessage(message)) content.append(element("p", "message-text message-body-text", message.text || ""));
         renderImage(message, content);
         if (message.status === "pending") {
-          const pending = element("p", "message-text", "This image is still being generated. You can switch or start other chats while it runs. Saved results are checked automatically; do not resubmit this turn.");
+          const pending = element("p", "message-pending", textMessage(message)
+            ? "Responding… Partial text may change. Saved results are checked automatically; do not resubmit this turn."
+            : "This image is still being generated. You can switch or start other chats while it runs. Saved results are checked automatically; do not resubmit this turn.");
           pending.setAttribute("role", "status");
           content.append(pending);
         }
         if (message.status === "failed") {
-          const failure = element("p", "message-failure", `Generation failed. ${text(message.error, "The backend could not complete this request.")}`);
+          const failure = element("p", "message-failure", `${textMessage(message) ? "Chat failed." : "Generation failed."} ${text(message.error, "The backend could not complete this request.")}`);
           failure.setAttribute("role", "alert");
           content.append(failure);
         }
         article.append(header, content);
-        fragment.append(article);
+        if (previous) previous.replaceWith(article);
+        else list.insertBefore(article, list.children[position] || null);
+        position += 1;
       }
     }
-    $("messages").replaceChildren(fragment);
+    for (const row of rows.values()) row.remove();
     $("empty-chat").hidden = !chat || chat.messages.length > 0;
     updateControls();
   }
 
   function applyChat(session, chat) {
-    if (state.stopped || state.deleted.has(session.id)) return false;
+    if (state.stopped || state.deleted.has(session.id) || chat.id !== session.id) return false;
     const previous = session.chat;
     // Chat messages are append-only. Never let an older GET (or an older POST
     // response followed by another tab's turn) remove messages or undo a terminal status.
@@ -842,6 +956,16 @@
           const next = chat.messages.find((message) => message.id === old.id);
           return !next || (["completed", "failed"].includes(old.status) && next.status !== old.status);
         }))) return false;
+    // Persistence deliberately trails token delivery. Pending GET snapshots must
+    // not shorten visible text; only a terminal snapshot is canonical (even if shorter).
+    chat = { ...chat, messages: chat.messages.map((message) => {
+      if (!textMessage(message) || message.status !== "pending") return message;
+      const old = previous?.messages.find((item) => item.id === message.id);
+      const local = session.request?.assistantId === message.id ? session.request.streamText : "";
+      const longest = [message.text, old?.text, local].filter((value) => typeof value === "string")
+        .reduce((best, value) => value.length > best.length ? value : best, "");
+      return longest === message.text ? message : { ...message, text: longest };
+    }) };
     const changed = JSON.stringify(previous) !== JSON.stringify(chat);
     const wasPending = session.serverPending;
     session.chat = chat;
@@ -849,6 +973,7 @@
     // another tab's newer model choice, must never overwrite an owned draft.
     if (!previous && !session.request && session.draft.version === 0 && !hasDraft(session)) {
       const latestModel = chat.messages.at(-1)?.model;
+      session.draft.mode = latestModel === CHAT_MODEL ? "chat" : "images";
       session.draft.model = MODEL_DEFAULTS.has(latestModel) ? latestModel : GPT_MODEL;
     }
     normalizeDraft(session);
@@ -897,8 +1022,9 @@
 
   function captureDraft(session = activeSession()) {
     if (!isActive(session)) return;
-    const values = { prompt: $("prompt").value, model: $("model").value, quality: $("quality").value,
-      size: $("size").value, useLatest: $("use-latest").checked };
+    const values = { prompt: $("prompt").value, mode: $("mode").value,
+      ...(!textMode(session) ? { model: $("model").value, quality: $("quality").value,
+        size: $("size").value, useLatest: $("use-latest").checked } : {}) };
     if (Object.entries(values).some(([key, value]) => session.draft[key] !== value)) {
       Object.assign(session.draft, values);
       session.draft.version += 1;
@@ -942,6 +1068,7 @@
   function clearSubmittedDraft(session, context) {
     if (context.draftCleared || session.draft !== context.draft || session.draft.version !== context.draftVersion) return;
     context.draftCleared = true;
+    // Both modes submit their attachment. Only clear the originating, unchanged draft.
     releaseAttachment(session);
     session.draft.prompt = "";
     session.draft.version += 1;
@@ -951,7 +1078,7 @@
 
   function hasDraft(session = activeSession()) {
     const draft = session.draft;
-    return Boolean(draft.prompt.trim() || draft.attachment || draft.model !== GPT_MODEL || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
+    return Boolean(draft.prompt.trim() || draft.attachment || draft.mode === "chat" || draft.model !== GPT_MODEL || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
   }
 
   function confirmAction({ title, description, label, cancelLabel = "Cancel" }) {
@@ -1059,6 +1186,7 @@
 
   async function addAttachment(files) {
     if (locked()) { draftError("Wait for the current operation before changing the attachment."); return; }
+    if (!canAttach(activeSession())) { draftError("This backend does not support images in Chat. Switch to Images to attach a file, or send text without an attachment."); return; }
     if (files.length !== 1) { draftError("Attach exactly one PNG or JPEG image. Multiple files are not supported."); return; }
     const file = files[0];
     if (!["image/png", "image/jpeg"].includes(file.type)) { draftError("Choose a PNG or JPEG image. Other file types are not supported."); return; }
@@ -1097,7 +1225,7 @@
       session.draft.version += 1;
       url = null;
       if (isActive(session)) renderDraft();
-      showNotice(replacing ? "Attachment replaced. One image is attached." : "Image attached. Add a prompt, or use the default variation request shown below.", session);
+      showNotice(replacing ? "Attachment replaced. One image is attached." : `Image attached. Add a prompt, or send with the default ${textMode(session) ? "description" : "variation"} request shown below.`, session);
     } catch (error) {
       draftError(error instanceof DOMException ? "This image could not be decoded. Choose a valid PNG or JPEG." : errorText(error), session);
     } finally {
@@ -1145,14 +1273,15 @@
     session.request = null;
     session.revision += 1;
     if (!session.serverPending) session.startedAt = null;
-    setIndicator(session, result);
+    setIndicator(session, result, context.mode);
     if (result === "completed") {
       clearSubmittedDraft(session, context);
       showError("", session);
-      showNotice("Your image is ready. Keep exploring, or download it to make it yours.", session);
+      showNotice(context.mode === "chat" ? `Reply ready.${context.contextTruncated ? ` ${TRUNCATED_CONTEXT_NOTICE}` : ""}` : "Your image is ready. Keep exploring, or download it to make it yours.", session);
     } else {
-      draftError("Generation failed. This chat’s prompt, settings and attachment have been kept for retry. The saved failure is shown in the conversation.", session);
-      showNotice("", session);
+      draftError(context.mode === "chat" ? "Chat failed. The submitted prompt and attachment are kept. Review the saved partial reply and error before retrying."
+        : "Generation failed. This chat’s prompt, settings and attachment have been kept for retry. The saved failure is shown in the conversation.", session);
+      showNotice(context.mode === "chat" ? `Chat failed.${context.contextTruncated ? ` ${TRUNCATED_CONTEXT_NOTICE}` : ""}` : "", session);
     }
     renderHistory();
     if (isActive(session)) updateControls();
@@ -1161,7 +1290,7 @@
   function holdUnconfirmed(session, context, detail) {
     if (state.stopped || session.request !== context) return;
     context.phase = "unconfirmed";
-    context.detail = `${detail} Your draft and attachment are kept in this tab. You can switch or start other chats. No generation request will be retried automatically.`;
+    context.detail = `${detail} Your draft and attachment are kept in this tab. You can switch or start other chats. No request will be retried automatically.`;
     setIndicator(session, "unconfirmed");
     if (isActive(session)) updateControls();
     renderHistory();
@@ -1179,7 +1308,7 @@
       if (context.assistantId && ["completed", "failed"].includes(result)) {
         finishConfirmed(session, context, result);
       } else {
-        const detail = result === "pending" ? "A saved turn is still generating. Results are checked automatically."
+        const detail = result === "pending" ? "A saved turn is still running. Results are checked automatically."
           : ["completed", "failed"].includes(result) ? `A matching ${result} turn is saved, but the interrupted response cannot be reliably attributed to this request. Review the conversation before choosing “Result reviewed”.`
           : result === "other" ? "Other saved activity is visible, but this request’s outcome is uncertain. Review the conversation before choosing “Result reviewed”."
           : "No new turn is saved yet. The original request may still arrive; an empty result does not prove it stopped. Check again before retrying.";
@@ -1191,8 +1320,8 @@
         if (!session.rejected) setIndicator(session, assistant.status);
         showNotice(session.rejected
           ? "Saved activity in this chat finished. Your rejected request was not retried; its draft is kept."
-          : assistant.status === "completed" ? "A saved image is ready. Any unsent draft in this tab has been kept."
-          : "A saved generation failed. Any unsent draft in this tab has been kept.", session);
+          : assistant.status === "completed" ? (textMessage(assistant) ? "Reply ready. Any unsent draft in this tab has been kept." : "A saved image is ready. Any unsent draft in this tab has been kept.")
+          : (textMessage(assistant) ? "Chat failed. Any unsent draft in this tab has been kept." : "A saved generation failed. Any unsent draft in this tab has been kept."), session);
       }
       session.startedAt = null;
     }
@@ -1208,18 +1337,236 @@
     }
   }
 
+  // POST SSE cannot use EventSource. Decode incrementally, including split UTF-8
+  // and CRLF, dispatch only complete events, and bound both wire and text memory.
+  async function consumeTextEvents(body, onEvent) {
+    const reader = body.getReader();
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    const encoder = new TextEncoder();
+    let bytes = 0, eventBytes = 0, buffer = "", event = "", data = [];
+    function drain(eof = false) {
+      let match;
+      while ((match = /[\r\n]/.exec(buffer))) {
+        const index = match.index;
+        if (buffer[index] === "\r" && index === buffer.length - 1 && !eof) break;
+        const separator = buffer[index] === "\r" && buffer[index + 1] === "\n" ? 2 : 1;
+        const line = buffer.slice(0, index);
+        buffer = buffer.slice(index + separator);
+        eventBytes += encoder.encode(line).byteLength + separator;
+        if (eventBytes > MAX_EVENT_BYTES) throw new Error("A text-stream event exceeded 256 KB.");
+        if (!line) {
+          if (data.length || event) {
+            if (!event || !data.length) throw new Error("The text stream contained an incomplete event.");
+            const payload = JSON.parse(data.join("\n"));
+            if (onEvent(event, payload)) return true;
+          }
+          event = "";
+          data = [];
+          eventBytes = 0;
+        } else if (!line.startsWith(":")) {
+          const colon = line.indexOf(":");
+          const field = colon < 0 ? line : line.slice(0, colon);
+          let value = colon < 0 ? "" : line.slice(colon + 1);
+          if (value.startsWith(" ")) value = value.slice(1);
+          if (field === "event") event = value;
+          else if (field === "data") data.push(value);
+          else if (!["id", "retry"].includes(field)) throw new Error("The text stream contained an unknown field.");
+        }
+      }
+      if (eventBytes + encoder.encode(buffer).byteLength > MAX_EVENT_BYTES) throw new Error("A text-stream event exceeded 256 KB.");
+      return false;
+    }
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          if (drain(true)) return;
+          throw new Error("The text stream ended without a completed or failed event. Check the saved result before sending again.");
+        }
+        bytes += value.byteLength;
+        if (bytes > MAX_STREAM_BYTES) throw new Error("The text stream exceeded 2 MB.");
+        buffer += decoder.decode(value, { stream: true });
+        if (drain()) return;
+      }
+    } finally {
+      void reader.cancel().catch(() => { /* Transport abort also releases the stream. */ });
+      reader.releaseLock();
+    }
+  }
+
+  function textEventChat(payload, session, context, status) {
+    if (payload.partialHistory !== undefined && typeof payload.partialHistory !== "boolean") {
+      throw new Error("The text stream contained an invalid history marker.");
+    }
+    const chat = validateChat(payload.chat, session.id);
+    const ids = new Set();
+    for (const message of chat.messages) {
+      const old = session.chat?.messages.find((item) => item.id === message.id);
+      if (!message.id || ids.has(message.id) || (old && old.role !== message.role) || (textMessage(message) &&
+          (typeof message.text !== "string" || message.text.length > (message.role === "user" ? MAX_CHAT_PROMPT_CHARS : MAX_REPLY_CHARS) ||
+           !["pending", "completed", "failed"].includes(message.status)))) {
+        throw new Error("The text stream contained invalid saved messages.");
+      }
+      ids.add(message.id);
+    }
+    const index = chat.messages.findIndex((message) => message.id === payload.messageId);
+    const assistant = chat.messages[index];
+    if (!assistant || assistant.role !== "assistant" || !textMessage(assistant) || assistant.status !== status) {
+      throw new Error("The text stream did not identify the expected saved reply.");
+    }
+    const user = chat.messages[index - 1];
+    if (!user || user.role !== "user" || !textMessage(user) || user.status !== "completed" ||
+        context.beforeIds.has(user.id) || (context.userId && context.userId !== user.id)) {
+      throw new Error("The text stream did not contain the saved user turn.");
+    }
+    // Only the validated SSE envelope opts into merging. A chat.partialHistory field
+    // on arbitrary JSON/GET responses must never make an incomplete snapshot canonical.
+    if (payload.partialHistory !== true) return chat;
+    const incoming = new Map(chat.messages.map((message) => {
+      const old = session.chat?.messages.find((item) => item.id === message.id);
+      let merged = { ...old, ...message };
+      if (message.id === user.id) merged.text = context.prompt;
+      else if (message.id !== assistant.id && typeof old?.text === "string" &&
+          typeof message.text === "string" && old.text.length > message.text.length) {
+        merged.text = old.text;
+      }
+      return [message.id, merged];
+    }));
+    const messages = (session.chat?.messages || []).map((old) => {
+      const message = incoming.get(old.id) || old;
+      incoming.delete(old.id);
+      return message;
+    });
+    messages.push(...incoming.values());
+    return { ...chat, messages };
+  }
+
+  function appendTextDelta(session, context, value) {
+    if (context.streamText.length + value.length > MAX_REPLY_CHARS) throw new Error("The text reply exceeded 12,000 characters.");
+    context.streamText += value;
+    const message = session.chat?.messages.find((item) => item.id === context.assistantId);
+    // A GET may already have the canonical terminal reply, or a longer persisted
+    // partial. Never append to either; deltas have their own accumulator.
+    if (!message || message.status !== "pending" || context.streamText.length < (message.text?.length || 0)) return;
+    message.text = context.streamText;
+    if (!isActive(session)) return;
+    const article = [...$("messages").children].find((node) => node.dataset.messageId === message.id);
+    const content = article?.querySelector(".message-body-text");
+    if (content) {
+      content.textContent = message.text; // Intentionally no HTML/Markdown interpretation.
+      article.dataset.signature = JSON.stringify(message);
+    }
+  }
+
+  function receiveTextEvent(session, context, event, payload) {
+    if (state.stopped || session.request !== context || state.deleted.has(session.id)) return true;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+        typeof payload.messageId !== "string" || !payload.messageId ||
+        !["started", "delta", "completed", "failed"].includes(event)) {
+      throw new Error("The text stream contained an unknown or invalid event.");
+    }
+    if (event === "started") {
+      if (context.assistantId || typeof payload.contextTruncated !== "boolean" || context.beforeIds.has(payload.messageId)) {
+        throw new Error("The text stream contained an invalid start event.");
+      }
+      const chat = textEventChat(payload, session, context, "pending");
+      const index = chat.messages.findIndex((message) => message.id === payload.messageId);
+      const user = chat.messages[index - 1];
+      if (!user || user.role !== "user" || !textMessage(user) || context.beforeIds.has(user.id)) {
+        throw new Error("The text stream did not contain the saved user turn.");
+      }
+      context.assistantId = payload.messageId;
+      context.userId = user.id;
+      context.streamText = chat.messages[index].text;
+      context.contextTruncated = payload.contextTruncated;
+      session.revision += 1; // Fence any GET started before the correlated response.
+      applyChat(session, chat);
+      if (payload.partialHistory === true) session.needsRead = true;
+      if (payload.contextTruncated) showNotice(TRUNCATED_CONTEXT_NOTICE, session);
+      return false;
+    }
+    if (!context.assistantId || payload.messageId !== context.assistantId) {
+      throw new Error("The text stream changed reply identity or omitted its start event.");
+    }
+    if (event === "delta") {
+      if (typeof payload.text !== "string") throw new Error("The text stream contained an invalid text fragment.");
+      appendTextDelta(session, context, payload.text);
+      return false;
+    }
+    if (event === "failed" && typeof payload.error !== "string") throw new Error("The text stream contained an invalid failure.");
+    const chat = textEventChat(payload, session, context, event);
+    session.revision += 1;
+    if (!applyChat(session, chat) && session.chat) {
+      // Another tab may already have appended a later turn. Keep that newer
+      // history but replace THIS reply with the terminal canonical message.
+      const canonical = chat.messages.find((message) => message.id === context.assistantId);
+      if (!session.chat.messages.some((message) => message.id === canonical.id) ||
+          !applyChat(session, { ...session.chat, messages: session.chat.messages.map((message) =>
+            message.id === canonical.id ? canonical : message) })) {
+        throw new Error("The saved reply changed unexpectedly. Check the saved result before sending again.");
+      }
+    }
+    if (payload.partialHistory === true) session.needsRead = true;
+    finishConfirmed(session, context, event);
+    return true;
+  }
+
+  async function sendTextRequest(session, context) {
+    // Match the existing cookie/account and CSRF behavior without changing api()'s
+    // JSON/image 202 contract. Never retry this POST, even on a lost response.
+    if (!await checkAccount() || state.stopped) throw new Error("This session has ended.");
+    const controller = new AbortController();
+    state.reads.add(controller);
+    try {
+      const form = new FormData();
+      form.append("prompt", context.prompt);
+      form.append("model", CHAT_MODEL);
+      if (context.attachment) form.append("image", context.attachment, context.attachment.name);
+      const response = await fetch(`${chatPath(session.id)}/text-messages`, {
+        method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "Accept": "text/event-stream", "X-ImageChat-Request": "1" },
+        body: form,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)])
+      });
+      if (state.stopped) throw new Error("This session has ended.");
+      if (response.status === 401) {
+        endSession();
+        const error = new Error("Your session ended. Sign in again to continue.");
+        error.status = 401;
+        throw error;
+      }
+      if (!response.ok) {
+        let payload;
+        try { payload = await response.json(); } catch { /* Preserve explicit HTTP rejection even without JSON. */ }
+        const error = new Error(text(payload?.error, `The request failed (HTTP ${response.status}).`));
+        error.status = response.status;
+        throw error;
+      }
+      if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "text/event-stream" || !response.body) {
+        throw new Error("The backend did not return a text event stream. Check the saved result before sending again.");
+      }
+      await consumeTextEvents(response.body, (event, payload) => receiveTextEvent(session, context, event, payload));
+    } finally {
+      controller.abort();
+      state.reads.delete(controller);
+    }
+  }
+
   async function sendMessage() {
     if (locked() || state.composing) return;
     const session = activeSession();
     captureDraft(session);
     draftError("");
-    const selected = modelStatus(session.draft.model);
-    if (selected?.configured !== true) { draftError(`${modelLabel(session.draft.model)} is unavailable until its backend readiness is confirmed in Settings. No other model will be used.`); return; }
+    const selected = modelStatus(selectedModelId(session));
+    if (selected?.configured !== true) { draftError(`${modelLabel(selectedModelId(session))} is unavailable until its backend readiness is confirmed in Settings. No other model will be used.`); return; }
     if (effectiveEdit(session) && !selected.supportsEditing) { draftError("This model does not support editing. Remove the attachment and turn off Use latest image."); return; }
+    if (inputError(session)) { draftError(inputError(session)); return; }
     const snapshot = { ...session.draft };
-    if (!snapshot.prompt.trim() && !snapshot.attachment) { draftError("Describe an image or attach one PNG or JPEG to begin."); $("prompt").focus(); return; }
+    if (!snapshot.prompt.trim() && !snapshot.attachment) { draftError("Enter a prompt or attach one PNG or JPEG to begin."); $("prompt").focus(); return; }
     const context = { phase: "sending", startedAt: Date.now(), beforeIds: new Set(session.chat?.messages.map((message) => message.id) || []),
-      draft: session.draft, draftVersion: snapshot.version, model: snapshot.model, prompt: snapshot.prompt.trim() || DEFAULT_IMAGE_PROMPT,
+      draft: session.draft, draftVersion: snapshot.version, mode: snapshot.mode, model: selectedModelId(session), attachment: snapshot.attachment,
+      prompt: snapshot.prompt.trim() || (snapshot.mode === "chat" ? DEFAULT_CHAT_IMAGE_PROMPT : DEFAULT_IMAGE_PROMPT),
       assistantId: null, checked: false, draftCleared: false };
     // Claim the draft synchronously, before even the first lazy-create await.
     // This prevents Enter/double-click from creating or submitting a second turn.
@@ -1250,6 +1597,11 @@
         creating = false;
         setBusy(null);
       }
+      if (context.mode === "chat") {
+        submitted = true;
+        await sendTextRequest(session, context);
+        return;
+      }
       const form = new FormData();
       form.append("prompt", context.prompt);
       form.append("model", snapshot.model);
@@ -1275,7 +1627,7 @@
       session.revision += 1;
       if (!submitted) {
         session.request = null;
-        draftError(`Could not create the chat. ${errorText(error)} Your draft and attachment are kept; no image-generation request was sent.`, session);
+        draftError(`Could not create the chat. ${errorText(error)} Your draft and attachment are kept; no model request was sent.`, session);
       } else if (error.status >= 400 && error.status < 500 && error.status !== 408) {
         // In particular, NEVER attribute a different tab's saved image to a
         // rejected local 409/429. Keep the draft even if a poll already saw it.
@@ -1283,10 +1635,10 @@
         session.rejected = true;
         session.needsRead = true;
         if (error.status === 409) { session.serverPending = true; session.startedAt ||= Date.now(); }
-        setIndicator(session, "failed");
+        setIndicator(session, "failed", context.mode);
         draftError(`${errorText(error)} This request was rejected. Your prompt, settings and attachment are kept; it was not retried.`, session);
       } else {
-        holdUnconfirmed(session, context, `The generation response could not be confirmed. ${errorText(error)}`);
+        holdUnconfirmed(session, context, `The ${context.mode === "chat" ? "text" : "generation"} response could not be confirmed. ${errorText(error)}`);
       }
     } finally {
       if (creating) setBusy(null);
@@ -1307,7 +1659,7 @@
     const session = activeSession();
     const context = session.request;
     if (state.busy || state.confirmResolve || !context?.checked || context.phase !== "unconfirmed" || session.serverPending || session.read) return;
-    const confirmed = await confirmAction({ title: "Resume this draft?", description: "The original response was not confirmed. Even if no pending turn is visible, it may still arrive. Review the saved images first: sending again could generate and charge for a duplicate. This only unlocks the draft; it does not send or clear anything.", label: "Result reviewed · keep draft", cancelLabel: "Keep checking" });
+    const confirmed = await confirmAction({ title: "Resume this draft?", description: "The original response was not confirmed. Even if no pending turn is visible, it may still arrive. Review the saved conversation first: sending again could create and charge for a duplicate. This only unlocks the draft; it does not send or clear anything.", label: "Result reviewed · keep draft", cancelLabel: "Keep checking" });
     if (!confirmed || state.busy || session.request !== context || session.serverPending || session.read || !context.checked) return;
     session.request = null;
     session.revision += 1;
@@ -1467,8 +1819,8 @@
     });
   }
   $("prompt").addEventListener("input", () => { captureDraft(); draftError(""); updateControls(); renderHistory(); });
-  for (const id of ["model", "quality", "size", "use-latest"]) {
-    $(id).addEventListener("change", () => { captureDraft(); renderStatus(); renderHistory(); });
+  for (const id of ["mode", "model", "quality", "size", "use-latest"]) {
+    $(id).addEventListener("change", () => { captureDraft(); draftError(""); renderStatus(); renderHistory(); });
   }
   $("prompt").addEventListener("compositionstart", () => { state.composing = true; });
   $("prompt").addEventListener("compositionend", () => { state.composing = false; });
@@ -1479,7 +1831,7 @@
     }
   });
   $("composer").addEventListener("submit", (event) => { event.preventDefault(); if (!state.composing) void sendMessage(); });
-  $("attach-button").addEventListener("click", () => { if (!locked()) $("image-input").click(); });
+  $("attach-button").addEventListener("click", () => { if (!locked() && canAttach(activeSession())) $("image-input").click(); });
   $("image-input").addEventListener("change", (event) => {
     const files = [...event.target.files];
     if (files.length) void addAttachment(files);
@@ -1494,7 +1846,7 @@
     draftError("");
     showNotice("Attachment removed.");
     renderHistory();
-    $("attach-button").focus();
+    (canAttach(session) ? $("attach-button") : $("prompt")).focus();
   });
   $("composer").addEventListener("paste", (event) => {
     const files = [...(event.clipboardData?.files || [])];
@@ -1506,12 +1858,12 @@
     if (!hasFiles(event)) return;
     event.preventDefault();
     dragDepth += 1;
-    if (!locked() && !document.querySelector("dialog[open]") && !state.sidebarOpen) $("composer").classList.add("drag-over");
+    if (!locked() && canAttach(activeSession()) && !document.querySelector("dialog[open]") && !state.sidebarOpen) $("composer").classList.add("drag-over");
   });
   document.addEventListener("dragover", (event) => {
     if (!hasFiles(event)) return;
     event.preventDefault();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = locked() ? "none" : "copy";
+    if (event.dataTransfer) event.dataTransfer.dropEffect = locked() || !canAttach(activeSession()) ? "none" : "copy";
   });
   document.addEventListener("dragleave", (event) => {
     if (!hasFiles(event)) return;

@@ -8,6 +8,7 @@ The application also supports Azure Container Apps Consumption with Blob, Table 
 
 ## Included features
 
+- Streaming multimodal conversation through the `gpt-5.6-sol` Responses deployment, with configurable long-history budgets.
 - Text-only generation, image-only variation, and text + image editing.
 - Follow-up requests using earlier successful prompts and the latest generated image.
 - Per-chat model selection with independent deployment readiness and model-specific size/quality controls.
@@ -137,6 +138,43 @@ For an actual trusted ingress, configure:
 The app processes **one trusted forwarding hop**, accepts only `X-Forwarded-For` and `X-Forwarded-Proto` from the allowlist, normalizes IPv4-mapped IPv6, and rejects empty allowlists and `/0` trust-all networks when enabled. Do not guess Azure proxy ranges or trust every address/private network. Restrict direct container access to the trusted ingress; multiple proxies require a topology-specific configuration change and spoofing tests. The generic `ASPNETCORE_FORWARDEDHEADERS_ENABLED` convenience setting is disabled by the application to avoid implicit trust-all behavior.
 
 IP identifies a network source, not necessarily a person (NAT/VPNs/shared networks apply). The authenticated user ID provides account attribution. Reference: [ASP.NET Core reverse proxy guidance](https://learn.microsoft.com/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0).
+
+## Chat with GPT-5.6-sol (text and images)
+
+Select **Chat** in the composer to use `gpt-5.6-sol`, independently of the three image-generation models. Chat can answer text prompts, analyze an uploaded PNG/JPEG, and discuss prior images in the same conversation. Image-only messages use “Describe this image and help me understand it.” Replies are real model text, rendered as plain text (not executable HTML). Switch back to **Images** to generate or edit pictures.
+
+Merge the `Foundry.Chat` section from [appsettings.Models.example.json](appsettings.Models.example.json) into your ignored local configuration, preserving existing settings. Configure its own API key or `DefaultAzureCredential`, then restart. The supplied endpoint is `https://embedding-0483-resource.services.ai.azure.com/openai/v1/responses`; an HTTPS resource root is also accepted and the app appends `/openai/v1/responses`. No API-version query or another provider's credentials are inherited. Deployment names are configurable—`gpt-5.6-sol` is treated as your deployment identifier, not a verified public model capability specification.
+
+Requests use the Responses API with `stream: true`, `store: false`, `max_output_tokens`, and chronological user/assistant messages. Images are sent as `input_image` base64 data URLs alongside `input_text`. Only visible output text/refusal events are forwarded; reasoning/tool-event content is not exposed. No tools, browsing, image-generation tools or external image URL fetching are enabled. Set `Foundry:Chat:Streaming=false` if your deployment doesn't support streaming; a complete JSON response is handled in that mode. An unsupported request is never automatically retried with different parameters or another model.
+
+### Longer context, with explicit application budgets
+
+| Setting (`Foundry:Chat:` prefix) | Default | Meaning |
+| --- | --- | --- |
+| `MaxPromptCharacters` | 64,000 | Maximum prompt length; configurable up to 256,000 |
+| `MaxContextCharacters` | 256,000 | Text across retained input messages; configurable up to 1,000,000, at least the prompt budget |
+| `MaxContextMessages` | 200 | Retained input-message budget; 2–1,000 |
+| `MaxContextImages` | 8 | Current and historical images; 1–16 |
+| `MaxContextImageBytes` | 33,554,432 | Total decoded image bytes; configurable 20–64 MiB |
+| `SupportsImages` | `true` | Operator can disable image input if the deployment rejects it |
+| `MaxOutputTokens` | 2,048 | Requested output-token limit; separate from input context |
+| `TimeoutSeconds` | 180 | Provider response timeout; 30–210 seconds |
+
+These are **application character/message/image budgets, not the model's token context window**. The exact token window for this deployment has not been verified. Image token accounting also depends on the model. Adjust budgets to your deployment's supported limits; Foundry may reject context that exceeds them. Each upload remains limited to one PNG/JPEG of 20 MiB; historical images can bring the total up to the configured history limit.
+
+The current message and image take priority. The app retains recent **whole successful turns**, excludes failed/pending turns, and includes previous chat answers. Prior generated images are user reference inputs, not fabricated assistant answers. Selected image bytes are loaded only through owner-authorized image IDs. If older text/images are omitted for a budget, the stream explicitly flags **context truncated** and the UI shows a notice. Saved history is not deleted. Replies currently have a separate 12,000-character application limit for safe cloud-table storage; a large input window does not imply unlimited output.
+
+### Streaming, persistence and cloud behavior
+
+`POST /api/chats/{id}/text-messages` accepts multipart prompt/model/image or JSON prompt/model (text-only), and emits SSE `started`, `delta`, `completed` or `failed` events. The browser receives a compact, explicitly partial snapshot of the current turn, while GET chat history always returns stored messages. This keeps long-history data out of individual SSE events. UTF-8/chunk boundaries are handled incrementally. Drafts and streaming replies remain scoped to each chat; other chats remain usable.
+
+Partial reply snapshots are saved approximately every 500 ms when new text arrives. Final canonical text replaces deltas; interrupted streams keep a failed partial rather than reporting success. A disconnected browser does not trigger a retry; the server continues within its timeout and saves the outcome. Reopen the chat to recover. A process crash may lose text since the last snapshot. Local startup marks pending turns failed; Azure uses a fixed five-minute text deadline and guarded recovery on reads/dispatcher passes. No recovery repeats the billable call.
+
+Text chat currently streams **directly from the web process**, including in Azure mode; existing image jobs continue through their durable queue. The default 180-second provider budget is below Container Apps' documented 240-second HTTP timeout, but proxy/network limits can still interrupt a stream. Long cloud prompts are stored in private blobs to avoid Azure Table property limits. Keep cookie/auth, ingress and storage protections enabled.
+
+Text requests have a separate **20-per-minute per-account** app limit (shared across Azure replicas). They appear in admin telemetry as operation `chat`, with user/IP/timestamps/model/outcome, but always count **zero generated images**. Telemetry does not contain prompt/reply text or image bytes. No live model requests are made by tests.
+
+All settings support environment overrides such as `Foundry__Chat__ApiKey`, `Foundry__Chat__MaxContextCharacters`, and `Foundry__Chat__Streaming`. Compose supports `CHAT_ENDPOINT`, `CHAT_DEPLOYMENT`, `CHAT_AUTH_MODE`, `CHAT_API_KEY`, and `CHAT_STREAMING`. Reference: [Azure Responses API](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/responses).
 
 ## How image conversations work
 

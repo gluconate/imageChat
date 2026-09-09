@@ -66,7 +66,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddSingleton(services => services.GetRequiredService<IConfiguration>()
     .GetSection("Foundry").Get<FoundryOptions>() ?? new());
 builder.Services.AddSingleton<ModelCatalog>();
+builder.Services.AddSingleton(services => services.GetRequiredService<IConfiguration>()
+    .GetSection("Foundry:Chat").Get<ChatModelOptions>() ?? new());
 builder.Services.AddSingleton<TokenCredential>(_ => new DefaultAzureCredential());
+builder.Services.AddHttpClient<ITextChatGenerator, ResponsesChatClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient<IImageGenerator, FoundryClient>(http => http.Timeout = Timeout.InfiniteTimeSpan)
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton(services => new ChatStore(services.GetRequiredService<AppPaths>().DataDirectory));
@@ -76,13 +80,18 @@ builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = InputRules.M
 builder.Services.Configure<FormOptions>(f =>
 {
     f.MultipartBodyLengthLimit = InputRules.MaxImageBytes + 1024 * 1024;
-    f.ValueLengthLimit = 32000;
+    f.ValueLengthLimit = 256000;
     // Avoid ASP.NET spooling uploaded private images to a machine-global temp directory.
     f.MemoryBufferThreshold = InputRules.MaxImageBytes + 1024 * 1024;
 });
 builder.Services.AddRateLimiter(rate =>
 {
     rate.RejectionStatusCode = 429;
+    rate.AddPolicy("chat", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown", _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0
+        }));
     rate.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
         TelemetryFilter.NormalizeIp(context.Connection.RemoteIpAddress) ?? "unknown", _ => new FixedWindowRateLimiterOptions
         {
@@ -195,7 +204,8 @@ app.Use(async (context, next) =>
 {
     string? telemetryId = null;
     if (context.Request.Method == "POST" && context.Request.Path.StartsWithSegments("/api/chats") &&
-        context.Request.Path.Value!.EndsWith("/messages", StringComparison.OrdinalIgnoreCase))
+        (context.Request.Path.Value!.EndsWith("/messages", StringComparison.OrdinalIgnoreCase) ||
+         context.Request.Path.Value!.EndsWith("/text-messages", StringComparison.OrdinalIgnoreCase)))
     {
         telemetryId = store.StartRequest(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!,
             context.User.Identity!.Name!, TelemetryFilter.NormalizeIp(context.Connection.RemoteIpAddress));
@@ -227,6 +237,8 @@ app.Use(async (context, next) =>
     {
         if (context.Request.Path == "/api/auth/login" || context.Request.Path == "/api/auth/password")
             shared.CheckRateLimit("login:" + TelemetryFilter.NormalizeIp(context.Connection.RemoteIpAddress), 10);
+        else if (context.Request.Path.Value!.EndsWith("/text-messages", StringComparison.OrdinalIgnoreCase))
+            shared.CheckRateLimit("chat:" + context.User.FindFirstValue(ClaimTypes.NameIdentifier), 20);
         else if (context.Items.ContainsKey("telemetryId")) shared.CheckRateLimit("generation", 5);
     }
     await next();
@@ -235,15 +247,16 @@ app.UseRateLimiter();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapAccountEndpoints();
+app.MapTextChat();
 app.MapGet("/login", (IWebHostEnvironment env) => Results.File(Path.Combine(env.WebRootPath, "login.html"), "text/html; charset=utf-8")).AllowAnonymous();
 app.MapGet("/admin", (IWebHostEnvironment env) => Results.File(Path.Combine(env.WebRootPath, "admin.html"), "text/html; charset=utf-8"))
     .RequireAuthorization(policy => policy.RequireRole("admin"));
 app.MapGet("/api/admin/telemetry", (string? from, string? to, string? ip, int? page, int? pageSize, IChatStore chats) =>
     chats.Report(TelemetryFilter.Parse(from, to, ip, page, pageSize))).RequireAuthorization(policy => policy.RequireRole("admin"));
 app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
-app.MapGet("/api/status", (ModelCatalog models) => new { configured = options.ConfigurationError() == null, deployment = options.Deployment,
+app.MapGet("/api/status", (ModelCatalog models, ChatModelOptions chatOptions) => new { configured = options.ConfigurationError() == null, deployment = options.Deployment,
     authMode = options.AuthMode, message = options.ConfigurationError() ?? "Configuration ready. The connection is verified when you generate an image.",
-    defaultModel = ModelCatalog.Gpt, models = models.Statuses() });
+    defaultModel = ModelCatalog.Gpt, models = models.Statuses(), chatModel = TextChatEndpoints.Status(chatOptions) });
 app.MapGet("/api/chats", (IChatStore store, ClaimsPrincipal user) => store.List(user.FindFirstValue(ClaimTypes.NameIdentifier)!));
 app.MapPost("/api/chats", (IChatStore store, ClaimsPrincipal user) => Results.Json(store.Create(user.FindFirstValue(ClaimTypes.NameIdentifier)!), statusCode: 201));
 app.MapGet("/api/chats/{id}", (string id, IChatStore store, ClaimsPrincipal user) => store.Get(id, user.FindFirstValue(ClaimTypes.NameIdentifier)!));

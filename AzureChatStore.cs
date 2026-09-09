@@ -21,6 +21,7 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
 
     public List<ChatSummary> List(string? ownerId = null) => storage.Rows("c")
         .Where(head => head.GetBoolean("Deleted") != true && (ownerId == null || head.GetString("Owner") == ownerId))
+        .Select(RecoverExpiredText)
         .OrderByDescending(head => head.GetString("UpdatedAt"), StringComparer.Ordinal)
         .Select(head => new ChatSummary(head.GetString("Id")!, head.GetString("Title")!, head.GetString("CreatedAt")!,
             head.GetString("UpdatedAt")!, head.GetInt32("Count") ?? 0,
@@ -42,9 +43,9 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
     {
         for (var attempt = 0; attempt < 5; attempt++)
         {
-            var head = Head(id, ownerId);
+            var head = RecoverExpiredText(Head(id, ownerId));
             var messages = storage.Rows("m" + id + ":").Select(row => new ChatMessage(row.GetString("Id")!, row.GetString("Role")!,
-                row.GetString("Text")!, row.GetString("ContentType") == null ? null : ImageUrl(row.GetString("Id")!),
+                ReadMessageText(row), row.GetString("ContentType") == null ? null : ImageUrl(row.GetString("Id")!),
                 row.GetString("CreatedAt")!, row.GetString("Size")!, row.GetString("Quality")!, row.GetString("Status")!, row.GetString("Error"),
                 row.GetString("Model"), row.GetString("Deployment"))).ToList();
             if (Head(id, ownerId).ETag != head.ETag) continue;
@@ -87,12 +88,25 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
     private string StartTurn(Chat chat, string text, string size, string quality, ImageData? attachment,
         string? telemetryId, string operation, GenerationInput? input, string? model = null, string? deployment = null)
     {
-        var head = Head(chat.Id);
+        ArgumentNullException.ThrowIfNull(text);
+        if (input != null && model == ChatModelOptions.ModelId)
+            throw new AppException(400, "Text turns must not use the image queue.");
+        if (operation == "chat")
+        {
+            if (model != ChatModelOptions.ModelId || size != "text" || quality != "text" || input != null)
+                throw new AppException(400, "Text turns require the chat model and text settings.");
+            if (attachment != null) attachment = InputRules.ValidateImage(attachment.Bytes);
+        }
+        var head = RecoverExpiredText(Head(chat.Id));
         if (!string.IsNullOrEmpty(head.GetString("Busy")) || head.GetInt32("Count") != chat.Messages.Count || head.GetString("UpdatedAt") != chat.UpdatedAt)
             throw Busy();
         var assistantId = Guid.NewGuid().ToString("N");
         var userId = Guid.NewGuid().ToString("N");
         if (attachment != null) UploadImage(userId, attachment);
+        // Table strings are limited to 64 KiB of UTF-16. Keep chat prompts (and any
+        // other long prompt) in private Work storage, never in an image/public URL.
+        var textBlob = operation == "chat" || text.Length > 32000;
+        if (textBlob) UploadMessageText(userId, text);
         if (input != null) storage.Work.GetBlobClient("input/" + assistantId).Upload(BinaryData.FromObjectAsJson(input));
         var changes = new List<TableTransactionAction>();
         foreach (var role in new[] { "user", "assistant" })
@@ -101,10 +115,11 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
             var messageKey = $"m{chat.Id}:{chat.Messages.Count + (role == "user" ? 0 : 1):D10}";
             var message = new TableEntity("app", messageKey)
             {
-                ["Id"] = messageId, ["Role"] = role, ["Text"] = role == "user" ? text : "", ["CreatedAt"] = Now(),
+                ["Id"] = messageId, ["Role"] = role, ["Text"] = role == "user" && !textBlob ? text : "", ["CreatedAt"] = Now(),
                 ["Size"] = size, ["Quality"] = quality, ["Status"] = role == "user" ? "completed" : "pending"
             };
             var index = new TableEntity("app", "x" + messageId) { ["ChatId"] = chat.Id, ["MessageKey"] = messageKey };
+            if (role == "user" && textBlob) message["TextBlob"] = true;
             if (model != null) message["Model"] = model;
             if (deployment != null) message["Deployment"] = deployment;
             if (role == "user" && attachment != null)
@@ -119,6 +134,8 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
         head["Count"] = chat.Messages.Count + 2;
         head["Busy"] = assistantId;
         head["UpdatedAt"] = Now();
+        if (operation == "chat") head["TextDeadline"] = DateTimeOffset.UtcNow.AddMinutes(5);
+        else head.Remove("TextDeadline");
         if (chat.Messages.Count == 0) head["Title"] = text[..Math.Min(text.Length, 64)];
         changes.Add(AzureStorage.Replace(head));
         if (telemetryId != null)
@@ -183,7 +200,7 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
 
     public void Delete(string id, string? ownerId = null)
     {
-        var head = Head(id, ownerId);
+        var head = RecoverExpiredText(Head(id, ownerId));
         if (!string.IsNullOrEmpty(head.GetString("Busy"))) throw Busy();
         head["Deleted"] = true;
         try { storage.Table.UpdateEntity(head, head.ETag, TableUpdateMode.Replace); }
@@ -199,6 +216,8 @@ public sealed partial class AzureChatStore(AzureStorage storage) : IChatStore
             var messageId = row.GetString("Id")!;
             storage.Images.GetBlobClient(messageId).DeleteIfExists();
             storage.Work.GetBlobClient("input/" + messageId).DeleteIfExists();
+            // Delete blobs before metadata, so dispatcher retries can finish partial cleanup.
+            storage.Work.GetBlobClient("text/" + messageId).DeleteIfExists();
             storage.Table.DeleteEntity("app", "x" + messageId, ETag.All);
             storage.Table.DeleteEntity("app", row.RowKey, ETag.All);
         }

@@ -124,7 +124,7 @@ public class FluxSelectionTests
         foreach (var secret in secrets) Assert.DoesNotContain(secret, text);
         using var json = JsonDocument.Parse(text);
         var root = json.RootElement;
-        AssertFields(root, "configured", "deployment", "authMode", "message", "defaultModel", "models");
+        AssertFields(root, "configured", "deployment", "authMode", "message", "defaultModel", "models", "chatModel");
         Assert.Equal(ModelCatalog.Gpt, root.GetProperty("defaultModel").GetString());
         Assert.Equal(gptReady, root.GetProperty("configured").GetBoolean());
         Assert.Equal(Deployment(ModelCatalog.Gpt), root.GetProperty("deployment").GetString());

@@ -4,6 +4,11 @@ services:
     ports:
       - "127.0.0.1:5080:8080"
     environment:
+      Foundry__Chat__Endpoint: ${CHAT_ENDPOINT:-https://embedding-0483-resource.services.ai.azure.com/openai/v1/responses}
+      Foundry__Chat__Deployment: ${CHAT_DEPLOYMENT:-gpt-5.6-sol}
+      Foundry__Chat__AuthMode: ${CHAT_AUTH_MODE:-ApiKey}
+      Foundry__Chat__ApiKey: ${CHAT_API_KEY:-}
+      Foundry__Chat__Streaming: ${CHAT_STREAMING:-true}
       Foundry__Endpoint: ${FOUNDRY_ENDPOINT:-}
       Foundry__Deployment: ${FOUNDRY_DEPLOYMENT:-gpt-image-2}
       Foundry__ApiKey: ${FOUNDRY_API_KEY:-}
