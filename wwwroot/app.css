@@ -21,13 +21,13 @@ button, input, textarea, select { font: inherit; }
 button, a, input, textarea, select { -webkit-tap-highlight-color: transparent; }
 button, select { cursor: pointer; }
 button { color: inherit; }
-button, a { touch-action: manipulation; }
+button, a, summary { touch-action: manipulation; }
 button { border: 0; }
 button:disabled, select:disabled { cursor: not-allowed; }
 button:disabled { opacity: .45; }
 input:disabled, textarea:disabled, select:disabled { opacity: .65; }
 a { color: inherit; }
-button, input, select, textarea, a { outline-offset: 4px; }
+button, input, select, textarea, a, summary { outline-offset: 4px; }
 :focus-visible { outline: 3px solid var(--focus); }
 [hidden] { display: none !important; }
 h1, h2, h3, p { margin: 0; }
@@ -131,6 +131,7 @@ svg { flex-shrink: 0; }
 .inspiration-heading { display: flex; justify-content: space-between; align-items: center; margin: 38px 0 13px; color: #77796b; font-size: 9px; letter-spacing: 1.6px; }
 .inspiration-heading > span:last-child { text-transform: none; letter-spacing: 0; font-family: Georgia, serif; font-style: italic; font-size: 12px; }
 .inspiration-heading > span:last-child span { font-family: "Segoe UI", sans-serif; padding-left: 7px; font-size: 18px; }
+.suggestion-help { color: #656b5a; font-size: 11px; margin: -5px 0 12px; }
 .suggestion-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .suggestion { display: flex; flex-direction: column; align-items: stretch; padding: 0; background: transparent; text-align: left; border-radius: 10px; transition: transform .2s; }
 .suggestion:hover:not(:disabled) { transform: translateY(-4px); }
@@ -206,6 +207,12 @@ svg { flex-shrink: 0; }
 .composer-model { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin: 8px 0 10px; }
 .composer-mode { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 13px; }
 .composer-mode select { font-weight: 600; min-width: 96px; }
+.thinking-control select { max-width: none; }
+.thinking-control label { color: #515748; font-weight: 600; }
+.composer-options-panel { border-top: 1px solid #eeeee4; margin-top: 12px; padding-top: 8px; }
+.composer-input-info { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 10px; }
+.options-toggle { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 6px 10px; border: 1px solid #dfdfd2; border-radius: 7px; background: #f3f3ec; color: #515748; font-size: 11px; margin-left: auto; flex-shrink: 0; }
+.options-toggle[aria-expanded="true"] > span { transform: rotate(180deg); }
 .chat-input-help { color: var(--muted); font-size: 10px; }
 .prompt-count { margin-left: auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .prompt-count.over-limit { color: #973e29; font-weight: 600; }
@@ -248,6 +255,9 @@ svg { flex-shrink: 0; }
 .generation-progress strong { font-size: 12px; font-weight: 500; }
 .generation-progress #generation-elapsed { color: #7a7d68; margin-left: 6px; font-variant-numeric: tabular-nums; }
 .generation-progress p { font-size: 10px; color: #6e735f; line-height: 1.7; margin-top: 3px; }
+.generation-progress details { flex: 1; min-width: 0; }
+.generation-progress summary { cursor: pointer; min-height: 28px; overflow-wrap: anywhere; }
+.progress-details-label { font-size: 10px; color: #565e49; margin-left: 8px; text-decoration: underline; text-underline-offset: 3px; }
 .recovery-notice { margin-bottom: 10px; }
 .recovery-actions { display: flex; flex-direction: column; align-items: flex-start; flex-shrink: 0; gap: 4px; }
 .recovery-actions .text-button { white-space: normal; text-align: left; }
@@ -396,6 +406,57 @@ dialog::backdrop { background: #1f251ec4; backdrop-filter: blur(5px); }
   dialog { padding: 22px; border-radius: 12px; max-height: calc(100dvh - 28px); }
   .dialog-heading h2 { font-size: 23px; }
   .image-dialog { width: calc(100% - 20px); padding: 12px; }
+}
+/* A compact first view; extra settings never crowd the conversation on a phone.
+   The dock and expanded panel scroll instead of growing over a running reply. */
+@media (max-width: 800px) {
+  .composer-dock {
+    padding: 10px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+    max-height: min(45dvh, 400px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scroll-padding-block: 10px;
+    background: var(--paper);
+  }
+  .composer { padding: 9px 10px; border-radius: 12px; }
+  .composer-mode { flex-wrap: nowrap; align-items: flex-end; gap: 10px; margin-bottom: 6px; }
+  .composer-mode .select-control { flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; }
+  .composer-mode label { font-size: 11px; line-height: 16px; }
+  .composer-mode select { min-width: 0; width: 100%; }
+  .mode-control { flex: 0 0 88px; }
+  .thinking-control { flex: 1; max-width: 240px; }
+  .composer .select-control select { font-size: 16px; min-height: 44px; padding: 6px; }
+  .composer textarea { height: 48px; min-height: 48px; max-height: 96px; line-height: 22px; padding: 2px 1px; font-size: 16px; resize: none; overflow-y: auto; }
+  .composer-bottom { padding-top: 6px; gap: 6px; }
+  .attach-button, .options-toggle, .send-button { min-height: 44px; font-size: 11px; }
+  .attach-button { padding: 6px 2px; gap: 4px; }
+  .options-toggle { padding: 6px 8px; gap: 4px; }
+  .attachment-controls { flex-shrink: 0; }
+  .send-button { padding: 8px 10px; gap: 6px; min-width: 0; }
+  #send-label { min-width: 0; overflow-wrap: anywhere; }
+  .attachment-limit { display: none; }
+  .composer-options-panel { max-height: min(32dvh, 280px); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; padding: 8px 4px 4px; scroll-padding-block: 8px; }
+  .composer-model, .composer-options { gap: 8px; }
+  .composer-options .select-control { flex-wrap: wrap; }
+  .model-control { width: 100%; }
+  .model-control select { width: 100%; }
+  .reuse-control { min-height: 44px; font-size: 12px; }
+  .reuse-control input { width: 18px; height: 18px; }
+  .composer-help { font-size: 11px; line-height: 1.6; gap: 8px; }
+  .composer-help > span { width: 100%; }
+  .chat-input-help, .prompt-count, .chat-context-help { font-size: 11px; }
+  .model-help a { display: inline-block; padding-block: 10px; }
+  .attachment-preview { padding: 4px 6px; margin-bottom: 6px; gap: 8px; }
+  .attachment-preview img { width: 36px; height: 36px; }
+  .attachment-preview .icon-button { width: 44px; min-height: 44px; }
+  .image-only-help { padding: 6px 8px; margin: 4px 0 6px; }
+  .generation-progress { padding: 0 8px; margin-bottom: 6px; gap: 8px; }
+  .generation-progress .spinner { margin-top: 14px; }
+  .generation-progress summary { min-height: 44px; padding-block: 12px; line-height: 20px; }
+  .generation-progress strong { font-size: 11px; }
+  .generation-progress #generation-elapsed { margin-left: 2px; }
+  .generation-progress p { padding-bottom: 8px; }
+  .recovery-actions .text-button { min-height: 44px; }
 }
 @media (max-height: 620px) and (min-width: 801px) {
   .sidebar-footer p, .sidebar-signoff { display: none; }

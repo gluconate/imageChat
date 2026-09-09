@@ -63,7 +63,7 @@ public sealed class TextChatApiTests
         Assert.Equal(32 * 1024 * 1024, chat.GetProperty("maxContextImageBytes").GetInt32());
         string[] publicFields = ["id", "label", "mode", "configured", "deployment", "authMode", "streaming",
             "supportsImages", "maxPromptCharacters", "maxContextCharacters", "maxContextMessages",
-            "maxContextImages", "maxContextImageBytes", "message"];
+            "maxContextImages", "maxContextImageBytes", "message", "reasoningEfforts", "defaultReasoningEffort"];
         Assert.Equal(publicFields.OrderBy(name => name), chat.EnumerateObject().Select(property => property.Name).OrderBy(name => name));
         AssertNoProviderDetails(body);
         Assert.Empty(fixture.Text.Inputs);

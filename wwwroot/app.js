@@ -14,6 +14,11 @@
   const MAI_MODEL = "mai-image-2.5-flash";
   const FLUX_MODEL = "flux.2-pro";
   const CHAT_MODEL = "gpt-5.6-sol";
+  const REASONING_EFFORTS = new Map([
+    ["default", "Model default"], ["none", "None"], ["minimal", "Minimal"],
+    ["low", "Low"], ["medium", "Medium"], ["high", "High"],
+    ["xhigh", "Extra high"], ["max", "Maximum"]
+  ]);
   const MAX_STREAM_BYTES = 2 * 1024 * 1024;
   const MAX_EVENT_BYTES = 256 * 1024;
   const MAX_REPLY_CHARS = 12000;
@@ -48,7 +53,9 @@
   };
 
   function newDraft() {
-    return { prompt: "", mode: "images", model: GPT_MODEL, quality: "medium", size: "1024x1024", useLatest: true,
+    // Model default means omit the upstream reasoning setting, not effort "none".
+    // Saved messages do not record effort; only this tab's drafts retain a choice.
+    return { prompt: "", mode: "chat", reasoningEffort: "default", model: GPT_MODEL, quality: "medium", size: "1024x1024", useLatest: true,
       attachment: null, attachmentUrl: null, version: 0 };
   }
 
@@ -66,6 +73,7 @@
   const pendingChat = (chat) => Boolean(chat?.messages.some((message) => message.role === "assistant" && message.status === "pending"));
   const chatBusy = (session) => Boolean(session.request || session.serverPending);
   const textMode = (session) => session.draft.mode === "chat";
+  const reasoningEfforts = () => state.status?.chatModel?.reasoningEfforts || ["default"];
   const canAttach = (session) => !textMode(session) || state.status?.chatModel?.supportsImages === true;
   const promptLimit = (session) => textMode(session)
     ? state.status?.chatModel?.maxPromptCharacters ?? DEFAULT_CHAT_PROMPT_CHARS : MAX_IMAGE_PROMPT_CHARS;
@@ -120,6 +128,9 @@
   }
 
   function normalizeDraft(session) {
+    // Readiness may disappear or remove a capability. Default never claims support
+    // for an explicit effort. An in-flight request owns its separate snapshot.
+    if (!reasoningEfforts().includes(session.draft.reasoningEffort)) session.draft.reasoningEffort = "default";
     // Text mode must not normalize or discard the dormant image settings.
     if (textMode(session)) return;
     const draft = session.draft;
@@ -163,7 +174,10 @@
     selectOptions("model", [...MODEL_DEFAULTS.values()].map((item) => [item.id, text(modelStatus(item.id)?.label, item.label)]), draft.model);
     const chat = textMode(session);
     $("mode").value = draft.mode;
-    $("mode").querySelector('[value="chat"]').disabled = !state.status?.chatModel;
+    selectOptions("reasoning-effort", reasoningEfforts().map((effort) => [effort, REASONING_EFFORTS.get(effort)]), draft.reasoningEffort);
+    $("reasoning-effort").title = !chat ? "Thinking effort applies only to Chat."
+      : reasoningEfforts().length === 1 ? "This backend reports no selectable thinking efforts. Model default is used."
+      : "Choose how much the model thinks. Model default leaves reasoning unspecified; it does not mean None.";
     $("image-model-control").hidden = chat;
     $("chat-model-label").hidden = !chat;
     $("image-options").hidden = chat;
@@ -237,7 +251,14 @@
         }
         return value;
       };
+      // Fail closed on missing/malformed capabilities; never infer efforts from
+      // a model name. Omission remains available even for a configured subset.
+      const efforts = Array.isArray(chat.reasoningEfforts) && chat.reasoningEfforts.length > 0 &&
+        chat.reasoningEfforts.every((effort) => typeof effort === "string" && REASONING_EFFORTS.has(effort))
+        ? [...new Set(["default", ...chat.reasoningEfforts])] : ["default"];
       chatModel = { id: CHAT_MODEL, label: "GPT-5.6-sol", mode: "chat", configured: chat.configured,
+        reasoningEfforts: efforts,
+        defaultReasoningEffort: efforts.includes(chat.defaultReasoningEffort) ? chat.defaultReasoningEffort : "default",
         streaming: chat.streaming, supportsImages: chat.supportsImages === true,
         maxPromptCharacters: Math.min(budget("maxPromptCharacters", DEFAULT_CHAT_PROMPT_CHARS, 1, 1048576), MAX_CHAT_PROMPT_CHARS),
         maxContextCharacters: budget("maxContextCharacters", 256000, 1, 4194304),
@@ -553,9 +574,10 @@
     $("password-open").disabled = accountLocked;
     $("password-fields").disabled = accountLocked;
     for (const button of document.querySelectorAll('[data-close="password-dialog"]')) button.disabled = state.authBusy;
-    for (const id of ["prompt", "mode", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
+    for (const id of ["prompt", "mode", "reasoning-effort", "model", "quality", "size", "use-latest", "image-input", "attach-button", "attachment-remove"]) {
       $(id).disabled = disabled;
     }
+    $("reasoning-effort").disabled = disabled || !chat || reasoningEfforts().length === 1;
     for (const id of ["model", "use-latest"]) $(id).disabled = disabled || chat;
     for (const id of ["image-input", "attach-button"]) $(id).disabled = disabled || !canAttach(session);
     $("quality").disabled = disabled || chat || !hasQualityControl(session.draft.model);
@@ -972,8 +994,9 @@
     // Initialize only on the first accepted chat read. Subsequent polls, even
     // another tab's newer model choice, must never overwrite an owned draft.
     if (!previous && !session.request && session.draft.version === 0 && !hasDraft(session)) {
-      const latestModel = chat.messages.at(-1)?.model;
-      session.draft.mode = latestModel === CHAT_MODEL ? "chat" : "images";
+      const latestModel = [...chat.messages].reverse().find((message) =>
+        message.model === CHAT_MODEL || MODEL_DEFAULTS.has(message.model))?.model;
+      session.draft.mode = MODEL_DEFAULTS.has(latestModel) ? "images" : "chat";
       session.draft.model = MODEL_DEFAULTS.has(latestModel) ? latestModel : GPT_MODEL;
     }
     normalizeDraft(session);
@@ -1023,6 +1046,7 @@
   function captureDraft(session = activeSession()) {
     if (!isActive(session)) return;
     const values = { prompt: $("prompt").value, mode: $("mode").value,
+      reasoningEffort: reasoningEfforts().includes($("reasoning-effort").value) ? $("reasoning-effort").value : "default",
       ...(!textMode(session) ? { model: $("model").value, quality: $("quality").value,
         size: $("size").value, useLatest: $("use-latest").checked } : {}) };
     if (Object.entries(values).some(([key, value]) => session.draft[key] !== value)) {
@@ -1078,7 +1102,7 @@
 
   function hasDraft(session = activeSession()) {
     const draft = session.draft;
-    return Boolean(draft.prompt.trim() || draft.attachment || draft.mode === "chat" || draft.model !== GPT_MODEL || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
+    return Boolean(draft.prompt.trim() || draft.attachment || draft.mode !== "chat" || draft.reasoningEffort !== "default" || draft.model !== GPT_MODEL || draft.quality !== "medium" || draft.size !== "1024x1024" || !draft.useLatest);
   }
 
   function confirmAction({ title, description, label, cancelLabel = "Cancel" }) {
@@ -1522,6 +1546,7 @@
       const form = new FormData();
       form.append("prompt", context.prompt);
       form.append("model", CHAT_MODEL);
+      if (context.reasoningEffort !== "default") form.append("reasoningEffort", context.reasoningEffort);
       if (context.attachment) form.append("image", context.attachment, context.attachment.name);
       const response = await fetch(`${chatPath(session.id)}/text-messages`, {
         method: "POST", credentials: "same-origin", cache: "no-store",
@@ -1566,6 +1591,7 @@
     if (!snapshot.prompt.trim() && !snapshot.attachment) { draftError("Enter a prompt or attach one PNG or JPEG to begin."); $("prompt").focus(); return; }
     const context = { phase: "sending", startedAt: Date.now(), beforeIds: new Set(session.chat?.messages.map((message) => message.id) || []),
       draft: session.draft, draftVersion: snapshot.version, mode: snapshot.mode, model: selectedModelId(session), attachment: snapshot.attachment,
+      reasoningEffort: snapshot.reasoningEffort,
       prompt: snapshot.prompt.trim() || (snapshot.mode === "chat" ? DEFAULT_CHAT_IMAGE_PROMPT : DEFAULT_IMAGE_PROMPT),
       assistantId: null, checked: false, draftCleared: false };
     // Claim the draft synchronously, before even the first lazy-create await.
@@ -1726,7 +1752,22 @@
   $("sidebar-toggle").addEventListener("click", () => setSidebar(!state.sidebarOpen));
   $("sidebar-close").addEventListener("click", () => setSidebar(false));
   $("sidebar-backdrop").addEventListener("click", () => setSidebar(false));
-  mobile.addEventListener("change", () => setSidebar(false, false));
+  // One set of controls: responsive defaults until the user explicitly toggles
+  // Options. Polling, mode switches and stream renders never collapse the panel.
+  let optionsExpanded = null;
+  function renderComposerOptions() {
+    const expanded = optionsExpanded ?? !mobile.matches;
+    if (!expanded && $("composer-options-panel").contains(document.activeElement)) $("composer-options-toggle").focus();
+    $("composer-options-panel").hidden = !expanded;
+    $("composer-options-toggle").setAttribute("aria-expanded", String(expanded));
+  }
+  $("composer-options-toggle").addEventListener("click", () => {
+    optionsExpanded = $("composer-options-toggle").getAttribute("aria-expanded") !== "true";
+    renderComposerOptions();
+  });
+  renderComposerOptions();
+  $("generation-details").open = !mobile.matches;
+  mobile.addEventListener("change", () => { setSidebar(false, false); renderComposerOptions(); });
   document.addEventListener("keydown", (event) => {
     if (!state.sidebarOpen || document.querySelector("dialog[open]")) return;
     if (event.key === "Escape") { event.preventDefault(); setSidebar(false); }
@@ -1810,16 +1851,18 @@
   for (const suggestion of document.querySelectorAll(".suggestion")) {
     suggestion.addEventListener("click", () => {
       if (locked()) return;
+      captureDraft();
+      $("mode").value = "images";
       $("prompt").value = suggestion.dataset.prompt;
       captureDraft();
       draftError("");
-      updateControls();
+      renderStatus();
       renderHistory();
       $("prompt").focus();
     });
   }
   $("prompt").addEventListener("input", () => { captureDraft(); draftError(""); updateControls(); renderHistory(); });
-  for (const id of ["mode", "model", "quality", "size", "use-latest"]) {
+  for (const id of ["mode", "reasoning-effort", "model", "quality", "size", "use-latest"]) {
     $(id).addEventListener("change", () => { captureDraft(); draftError(""); renderStatus(); renderHistory(); });
   }
   $("prompt").addEventListener("compositionstart", () => { state.composing = true; });

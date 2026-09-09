@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace ImageChat;
 
-public sealed record TextChatRequest([property: JsonRequired] string Prompt, string Model = ChatModelOptions.ModelId);
+public sealed record TextChatRequest([property: JsonRequired] string Prompt, string Model = ChatModelOptions.ModelId, string? ReasoningEffort = null);
 
 public static class TextChatEndpoints
 {
@@ -19,6 +19,7 @@ public static class TextChatEndpoints
         maxPromptCharacters = options.MaxPromptCharacters, maxContextCharacters = options.MaxContextCharacters,
         maxContextMessages = options.MaxContextMessages, maxContextImages = options.MaxContextImages,
         maxContextImageBytes = options.MaxContextImageBytes,
+        reasoningEfforts = new[] { "default" }.Concat(options.ReasoningEfforts ?? []).ToArray(), defaultReasoningEffort = "default",
         message = options.ConfigurationError() ?? "Configuration ready. Deployment capabilities are verified on your first request."
     };
 
@@ -37,12 +38,15 @@ public static class TextChatEndpoints
         if (options.ConfigurationError() is { } configurationError) throw new AppException(503, configurationError);
         string prompt;
         string model;
+        string? reasoningEffort;
         ImageData? attachment = null;
         if (context.Request.HasFormContentType)
         {
             var form = await context.Request.ReadFormAsync(context.RequestAborted);
             prompt = form["prompt"].ToString();
             model = form.ContainsKey("model") ? form["model"].ToString() : ChatModelOptions.ModelId;
+            if (form["reasoningEffort"].Count > 1) throw new AppException(400, "Choose one thinking effort per request.");
+            reasoningEffort = form.ContainsKey("reasoningEffort") ? form["reasoningEffort"].ToString() : null;
             if (form.Files.Count > 1 || (form.Files.Count == 1 && form.Files[0].Name != "image"))
                 throw new AppException(400, "Attach one PNG or JPEG per chat message.");
             if (form.Files.GetFile("image") is { } file)
@@ -59,13 +63,16 @@ public static class TextChatEndpoints
                 ?? throw new AppException(400, "Supply a chat prompt.");
             prompt = input.Prompt;
             model = input.Model;
+            reasoningEffort = input.ReasoningEffort;
         }
         else throw new AppException(400, "Use JSON for text or multipart form data for a prompt and image.");
         if (model != ChatModelOptions.ModelId) throw new AppException(400, "Choose the supported chat model.");
+        reasoningEffort = options.ValidateReasoningEffort(reasoningEffort);
         prompt = TextChatContext.ValidatePrompt(prompt, attachment != null, options);
         var requestId = context.Items["telemetryId"] as string;
         if (requestId != null) store.SetRequestModel(requestId, ChatModelOptions.ModelId, options.Deployment);
         var history = TextChatContext.Build(chat, prompt, attachment, store, owner, options);
+        var generationInput = history.Input with { ReasoningEffort = reasoningEffort };
         context.RequestAborted.ThrowIfCancellationRequested();
         var assistantId = store.BeginTurn(chat, prompt, "text", "text", attachment, requestId, "chat", ChatModelOptions.ModelId, options.Deployment);
         var responseText = new StringBuilder();
@@ -108,7 +115,7 @@ public static class TextChatEndpoints
         {
             await Send("started", Envelope(store.Get(id, owner)));
             var completed = false;
-            await foreach (var item in generator.GenerateAsync(history.Input, timeout.Token).WithCancellation(timeout.Token))
+            await foreach (var item in generator.GenerateAsync(generationInput, timeout.Token).WithCancellation(timeout.Token))
             {
                 if (item.Type == "delta")
                 {

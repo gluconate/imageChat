@@ -21,6 +21,10 @@ public sealed class ChatModelOptions
     public int TimeoutSeconds { get; set; } = 180;
     public int MaxOutputTokens { get; set; } = 2048;
     public bool Streaming { get; set; } = true;
+    // Expose only operator-approved values for this deployment. "default" in the UI
+    // means omit reasoning entirely, not disable reasoning with effort "none".
+    public string[] ReasoningEfforts { get; set; } = ["low", "medium", "high"];
+    private static readonly string[] KnownReasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
     // Application resource budgets, not claims about the deployment's token window.
     // Input characters and image bytes are independent of the output/storage limit.
@@ -42,7 +46,23 @@ public sealed class ChatModelOptions
             return "Set a valid chat token scope.";
         if (TimeoutSeconds is < 30 or > 210) return "Chat timeout must be between 30 and 210 seconds.";
         if (MaxOutputTokens <= 0) return "Chat maximum output tokens must be positive.";
+        if (ReasoningConfigurationError() is { } reasoningError) return reasoningError;
         return ContextConfigurationError();
+    }
+
+    private string? ReasoningConfigurationError() => ReasoningEfforts == null ||
+        ReasoningEfforts.Length > KnownReasoningEfforts.Length ||
+        ReasoningEfforts.Distinct(StringComparer.Ordinal).Count() != ReasoningEfforts.Length ||
+        ReasoningEfforts.Any(effort => !KnownReasoningEfforts.Contains(effort))
+            ? "Chat reasoning efforts must be unique, supported API effort names." : null;
+
+    public string? ValidateReasoningEffort(string? effort)
+    {
+        if (ReasoningConfigurationError() is { } error) throw new AppException(503, error);
+        if (effort is null or "default") return null;
+        if (!ReasoningEfforts.Contains(effort, StringComparer.Ordinal))
+            throw new AppException(400, "Choose a thinking effort supported by this chat deployment.");
+        return effort;
     }
 
     // Context construction does not need provider credentials or an endpoint.
@@ -81,7 +101,7 @@ public sealed class ChatModelOptions
 }
 
 public record ChatInputMessage(string Role, string Text, IReadOnlyList<ImageData>? Images = null);
-public record TextChatInput(IReadOnlyList<ChatInputMessage> Messages);
+public record TextChatInput(IReadOnlyList<ChatInputMessage> Messages, string? ReasoningEffort = null);
 public record TextChatEvent(string Type, string Text);
 
 public interface ITextChatGenerator
@@ -109,6 +129,7 @@ public sealed class ResponsesChatClient(HttpClient client, ChatModelOptions opti
         if (client.DefaultRequestHeaders.Contains("api-key") || client.DefaultRequestHeaders.Contains("Authorization"))
             throw new AppException(503, "Chat requires a client without default authentication headers.");
         var messages = ValidateInput(input);
+        var reasoningEffort = options.ValidateReasoningEffort(input.ReasoningEffort);
 
         // Ownership and whole-turn history selection belong to the parent/context builder.
         // Recheck application budgets here before credentials, base64 encoding, or HTTP.
@@ -120,16 +141,18 @@ public sealed class ResponsesChatClient(HttpClient client, ChatModelOptions opti
         deadline.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(options.TimeoutSeconds, 30, 210)));
         var token = deadline.Token;
         token.ThrowIfCancellationRequested();
+        var requestPayload = new Dictionary<string, object>
+        {
+            ["model"] = options.Deployment,
+            ["input"] = messages.Select(message => new { role = message.Role, content = MessageContent(message) }).ToArray(),
+            ["stream"] = streaming,
+            ["store"] = false,
+            ["max_output_tokens"] = options.MaxOutputTokens
+        };
+        if (reasoningEffort != null) requestPayload["reasoning"] = new { effort = reasoningEffort };
         using var request = new HttpRequestMessage(HttpMethod.Post, options.RequestUri())
         {
-            Content = JsonContent.Create(new
-            {
-                model = options.Deployment,
-                input = messages.Select(message => new { role = message.Role, content = MessageContent(message) }).ToArray(),
-                stream = streaming,
-                store = false,
-                max_output_tokens = options.MaxOutputTokens
-            })
+            Content = JsonContent.Create(requestPayload)
         };
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(streaming ? "text/event-stream" : "application/json"));
         if (authMode == "ApiKey")
