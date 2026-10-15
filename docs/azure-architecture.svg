@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="940" viewBox="0 0 1400 940" role="img" aria-labelledby="title desc">
+  <title id="title">ImageChat Azure serverless architecture</title>
+  <desc id="desc">A browser connects to an Azure Container Apps web application. The web application and two jobs use managed identity to access Azure Container Registry, Key Vault, Blob Storage, Table Storage, and Queue Storage. The web app and worker call externally configured Microsoft Foundry model deployments.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7fbff"/>
+      <stop offset="1" stop-color="#eef5fc"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#25476a" flood-opacity=".18"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#315b7d"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0078d4"/>
+    </marker>
+    <style>
+      .title { font: 700 30px "Segoe UI", Arial, sans-serif; fill: #16324f; }
+      .subtitle { font: 400 15px "Segoe UI", Arial, sans-serif; fill: #4b647a; }
+      .group-title { font: 700 18px "Segoe UI", Arial, sans-serif; fill: #244966; }
+      .box-title { font: 700 17px "Segoe UI", Arial, sans-serif; fill: #17324d; }
+      .box-text { font: 400 13px "Segoe UI", Arial, sans-serif; fill: #36536c; }
+      .label { font: 600 12px "Segoe UI", Arial, sans-serif; fill: #315b7d; paint-order: stroke; stroke: #f7fbff; stroke-width: 5px; stroke-linejoin: round; }
+      .small { font: 400 12px "Segoe UI", Arial, sans-serif; fill: #526b80; }
+      .group { fill: #fff; stroke: #9bbad2; stroke-width: 2; rx: 18; filter: url(#shadow); }
+      .service { fill: #f8fbfe; stroke: #6695b8; stroke-width: 1.5; rx: 12; }
+      .compute { fill: #e7f4ff; stroke: #0078d4; stroke-width: 2; rx: 12; }
+      .security { fill: #fff7df; stroke: #d19a00; stroke-width: 1.5; rx: 12; }
+      .external { fill: #f3ebff; stroke: #8060b3; stroke-width: 1.5; rx: 12; }
+      .flow { fill: none; stroke: #315b7d; stroke-width: 2; marker-end: url(#arrow); }
+      .flow-blue { fill: none; stroke: #0078d4; stroke-width: 2.5; marker-end: url(#arrowBlue); }
+      .auth { fill: none; stroke: #b27a00; stroke-width: 1.8; stroke-dasharray: 7 5; }
+      .pull { fill: none; stroke: #52738e; stroke-width: 1.8; stroke-dasharray: 3 4; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1400" height="940" fill="url(#background)"/>
+  <text class="title" x="700" y="48" text-anchor="middle">ImageChat Azure serverless architecture</text>
+  <text class="subtitle" x="700" y="76" text-anchor="middle">Consumption compute, durable Azure Storage, managed identity, and externally configured Microsoft Foundry models</text>
+
+  <rect class="service" x="40" y="135" width="200" height="100"/>
+  <circle cx="86" cy="175" r="22" fill="#0078d4"/>
+  <path d="M75 177h22M78 169l8-8 8 8M78 185l8 8 8-8" fill="none" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="122" y="170">User browser</text>
+  <text class="box-text" x="122" y="193">HTTPS requests</text>
+  <text class="box-text" x="122" y="212">and status polling</text>
+
+  <rect class="group" x="285" y="105" width="745" height="430"/>
+  <text class="group-title" x="315" y="137">Azure Container Apps managed environment (Consumption)</text>
+
+  <rect class="compute" x="325" y="175" width="260" height="125"/>
+  <rect x="343" y="194" width="38" height="38" rx="6" fill="#0078d4"/>
+  <path d="M352 204h20v18h-20zM356 199v28M368 199v28" fill="none" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="397" y="207">imagechat</text>
+  <text class="box-text" x="397" y="230">Container App / web API</text>
+  <text class="box-text" x="397" y="251">External HTTPS ingress</text>
+  <text class="box-text" x="397" y="272">Scales 0-1 replica</text>
+
+  <rect class="compute" x="690" y="175" width="295" height="125"/>
+  <rect x="708" y="194" width="38" height="38" rx="19" fill="#0078d4"/>
+  <path d="M717 213h20M727 203v20" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="762" y="207">imagechat-worker</text>
+  <text class="box-text" x="762" y="230">Event-triggered Container Apps job</text>
+  <text class="box-text" x="762" y="251">Consumes generation messages</text>
+  <text class="box-text" x="762" y="272">Up to 3 executions</text>
+
+  <rect class="compute" x="507" y="355" width="295" height="125"/>
+  <rect x="525" y="374" width="38" height="38" rx="6" fill="#0078d4"/>
+  <circle cx="544" cy="393" r="11" fill="none" stroke="#fff" stroke-width="2"/>
+  <path d="M544 385v9l6 4" fill="none" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="579" y="387">imagechat-dispatch</text>
+  <text class="box-text" x="579" y="410">Scheduled Container Apps job</text>
+  <text class="box-text" x="579" y="431">Recovery and reconciliation</text>
+  <text class="box-text" x="579" y="452">Runs every 5 minutes</text>
+
+  <path class="flow-blue" d="M240 185H325"/>
+  <text class="label" x="282" y="174" text-anchor="middle">HTTPS</text>
+
+  <rect class="group" x="70" y="590" width="930" height="300"/>
+  <text class="group-title" x="100" y="624">Shared Azure services</text>
+
+  <rect class="service" x="105" y="660" width="195" height="145"/>
+  <ellipse cx="144" cy="690" rx="21" ry="8" fill="#0078d4"/>
+  <path d="M123 690v35c0 5 9 9 21 9s21-4 21-9v-35M123 706c0 5 9 9 21 9s21-4 21-9" fill="#d9edfc" stroke="#0078d4" stroke-width="2"/>
+  <text class="box-title" x="180" y="692">Blob Storage</text>
+  <text class="box-text" x="180" y="714">images</text>
+  <text class="box-text" x="180" y="734">work inputs/results</text>
+  <text class="box-text" x="180" y="754">cookie keys</text>
+  <text class="small" x="202" y="785" text-anchor="middle">Private containers</text>
+
+  <rect class="service" x="330" y="660" width="195" height="145"/>
+  <rect x="349" y="678" width="43" height="43" rx="4" fill="#0078d4"/>
+  <path d="M349 691h43M363 678v43M378 678v43M349 706h43" stroke="#fff" stroke-width="1.5"/>
+  <text class="box-title" x="410" y="692">Table Storage</text>
+  <text class="box-text" x="410" y="714">accounts and chats</text>
+  <text class="box-text" x="410" y="734">messages and telemetry</text>
+  <text class="box-text" x="410" y="754">durable work records</text>
+  <text class="small" x="427" y="785" text-anchor="middle">imagechat table</text>
+
+  <rect class="service" x="555" y="660" width="195" height="145"/>
+  <rect x="575" y="681" width="42" height="34" rx="5" fill="#0078d4"/>
+  <path d="M583 689h26M583 697h19M583 705h23" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="635" y="692">Queue Storage</text>
+  <text class="box-text" x="635" y="714">generation notifications</text>
+  <text class="box-text" x="635" y="734">trigger and recovery path</text>
+  <text class="small" x="652" y="785" text-anchor="middle">generation queue</text>
+
+  <rect class="security" x="780" y="650" width="185" height="165"/>
+  <path d="M810 682l19-9 19 9v15c0 15-8 25-19 31-11-6-19-16-19-31z" fill="#ffca28" stroke="#a86f00" stroke-width="2"/>
+  <circle cx="829" cy="696" r="5" fill="#fff"/>
+  <path d="M829 701v11" stroke="#fff" stroke-width="3"/>
+  <text class="box-title" x="856" y="686">Key Vault</text>
+  <text class="box-text" x="856" y="708">foundryconfig secret</text>
+  <text class="box-text" x="856" y="728">sessionkeys RSA key</text>
+  <text class="box-text" x="856" y="751">wrap/unwrap cookie keys</text>
+  <text class="small" x="872" y="790" text-anchor="middle">RBAC access</text>
+
+  <rect class="service" x="1060" y="135" width="295" height="125"/>
+  <path d="M1084 176h48l-6 39h-36z" fill="#0078d4"/>
+  <path d="M1092 169h32M1098 162h20" stroke="#0078d4" stroke-width="5"/>
+  <text class="box-title" x="1148" y="177">Azure Container Registry</text>
+  <text class="box-text" x="1148" y="200">Private ImageChat image</text>
+  <text class="box-text" x="1148" y="221">Pulled by app and jobs</text>
+
+  <rect class="security" x="1060" y="330" width="295" height="130"/>
+  <circle cx="1104" cy="376" r="25" fill="#ffca28"/>
+  <path d="M1093 381c3-12 19-12 22 0M1097 369a7 7 0 1 0 14 0 7 7 0 1 0-14 0" fill="none" stroke="#7d5700" stroke-width="2"/>
+  <text class="box-title" x="1144" y="364">User-assigned</text>
+  <text class="box-title" x="1144" y="386">managed identity</text>
+  <text class="box-text" x="1084" y="424">Passwordless RBAC for all runtimes</text>
+
+  <rect class="external" x="1060" y="600" width="295" height="170"/>
+  <circle cx="1105" cy="651" r="27" fill="#8060b3"/>
+  <path d="M1090 652c8-18 23-18 31 0-8 18-23 18-31 0zM1105 637v30" fill="none" stroke="#fff" stroke-width="2"/>
+  <text class="box-title" x="1145" y="640">Microsoft Foundry</text>
+  <text class="box-text" x="1145" y="664">GPT-image, MAI, and FLUX</text>
+  <text class="box-text" x="1085" y="700">Configured existing model deployments</text>
+  <text class="box-text" x="1085" y="721">Not provisioned by this repository</text>
+  <text class="small" x="1207" y="751" text-anchor="middle">HTTPS model API calls</text>
+
+  <path class="flow" d="M455 300V570H202V660"/>
+  <path class="flow" d="M470 300V555H427V660"/>
+  <path class="flow" d="M500 300V540H652V660"/>
+  <text class="label" x="337" y="548">read/write</text>
+
+  <path class="flow" d="M750 300V330H980V570H695V660"/>
+  <path class="flow" d="M790 300V345H1010V585H470V660"/>
+  <path class="flow" d="M690 417H620V570H245V660"/>
+  <path class="flow" d="M655 480V635H652V660"/>
+  <path class="flow" d="M625 480V620H470V660"/>
+
+  <path class="flow-blue" d="M585 220C760 95 1010 520 1060 670"/>
+  <text class="label" x="892" y="418">generate / edit</text>
+  <path class="flow-blue" d="M985 236C1060 300 1020 570 1060 640"/>
+
+  <path class="pull" d="M1060 190H985"/>
+  <path class="pull" d="M1060 205C940 115 720 120 550 175"/>
+  <path class="pull" d="M1110 260C1070 315 880 370 802 395"/>
+  <text class="label" x="1020" y="177">image pull</text>
+
+  <path class="auth" d="M1060 382H985"/>
+  <path class="auth" d="M1060 397C980 480 930 545 900 650"/>
+  <path class="auth" d="M1110 460C980 550 760 610 695 660"/>
+  <path class="auth" d="M1100 460C900 570 560 610 470 660"/>
+  <path class="auth" d="M1090 460C820 555 360 600 245 660"/>
+  <text class="label" x="1015" y="374">identity</text>
+
+  <path class="flow" d="M750 725C770 725 770 265 690 265"/>
+  <text class="label" x="770" y="510">event trigger</text>
+
+  <text class="small" x="70" y="920">Solid arrows: application data flow</text>
+  <text class="small" x="335" y="920">Dotted arrows: container image pull</text>
+  <text class="small" x="610" y="920">Dashed gold lines: managed identity authorization</text>
+</svg>

@@ -6,6 +6,14 @@ A local image-creation studio for **GPT-image-2, MAI-Image-2.5-Flash and FLUX.2-
 
 The application also supports Azure Container Apps Consumption with Blob, Table and Queue Storage. See [deployment and administrator setup](infra/README.md) for the deployed environment, scale-to-zero behavior, costs and operations. The local SQLite instructions below still apply to local mode; the serverless deployment does not use a mounted SQLite database.
 
+### Azure architecture
+
+![ImageChat Azure serverless architecture](docs/azure-architecture.svg)
+
+The public HTTPS endpoint is an Azure Container App in a Consumption managed environment. It records application state in Table Storage, stores private images, work artifacts, and shared data-protection keys in Blob Storage, and submits opaque generation notifications to Queue Storage. An event-triggered Container Apps job consumes those notifications and performs model work; a scheduled job runs every five minutes to recover undelivered notifications and reconcile expired work.
+
+The web app and both jobs run the same image from Azure Container Registry and share a user-assigned managed identity. Azure RBAC grants that identity only the required image-pull, storage, secret, and key permissions. Key Vault supplies the mounted Foundry configuration and wraps shared cookie-protection keys. The web app and worker call existing Microsoft Foundry model deployments over HTTPS; those deployments are configured for the application but are not provisioned by this repository. See [the infrastructure templates](infra/) for resource definitions and [deployment operations](infra/README.md) for scaling, security, and recovery details.
+
 ## Included features
 
 - Streaming multimodal conversation through the `gpt-5.6-sol` Responses deployment, with configurable long-history budgets.
